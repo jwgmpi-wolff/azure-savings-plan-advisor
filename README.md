@@ -1,6 +1,6 @@
 # Azure Savings Plan Advisor
 
-**Windows app:** [Get the Windows x64 app installer from this repository](downloads/windows/AzureSavingsPlanAdvisor-0.7.0-Setup-x64.exe).
+**Windows app:** [Get the Windows x64 app installer from this repository](downloads/windows/AzureSavingsPlanAdvisor-0.7.1-Setup-x64.exe).
 Open the file and select **Download raw file** on GitHub, or run it from your
 local clone. [Verify its SHA-256 checksum](downloads/windows/SHA256SUMS.txt).
 For API development, see [prerequisite installers](#windows-installers)
@@ -17,7 +17,7 @@ User -> Copilot Studio -> Entra-authenticated REST API -> Azure Function
 
 ## Install the Windows app
 
-1. Open [the installer checked into this repository](downloads/windows/AzureSavingsPlanAdvisor-0.7.0-Setup-x64.exe)
+1. Open [the installer checked into this repository](downloads/windows/AzureSavingsPlanAdvisor-0.7.1-Setup-x64.exe)
    and select **Download raw file**, or use the copy under `downloads\windows`
    in your local clone. The same installer is also available in
    [the repository downloads folder](downloads/windows).
@@ -61,11 +61,13 @@ The screen, PDF, PowerPoint (`.pptx`) and CSV use the same normalized report:
   the same charts.
 - The scrollable results table includes subscription name/ID, recommendation,
   term, currency, hourly commitment, savings amount/percentage, coverage and
-  utilization. Source coverage is shown separately for each selected subscription.
+  utilization. Only actionable collection warnings are shown, using subscription
+  names rather than raw diagnostic keys; routine successful/empty API statuses,
+  API versions and verbose service messages are suppressed from the UI and exports.
   A failed subscription does not discard successful results from the others.
 - Click any results row (or focus a row and press Enter) to open a scrollable
   details popup with benefit/plan SKU, benefit cost, savings, discount assumptions,
-  financial details, collection time, evidence reference and source coverage.
+  financial details, collection time, evidence reference and any collection warnings.
   Escape or Close dismisses it. Changing report context closes stale details.
   Connected reports also collect current VM, VM scale set and App Service plan
   inventory using the same delegated user and selected subscriptions. Inventory
@@ -77,13 +79,19 @@ The screen, PDF, PowerPoint (`.pptx`) and CSV use the same normalized report:
   A returned benefit/plan SKU is not a VM SKU, and overall savings percentage
   is not a per-SKU discount. Offline discounts remain explicitly assumed.
 - PDF and PowerPoint include the executive summary, chart when percentages are
-  available, scope, collection time, source coverage/API versions, evidence
+  available, scope, collection time, actionable collection warnings, evidence
   references, details and limitations. Long reports paginate instead of dropping
   records. CSV includes the same metadata on each data row and separate rows for
   recommendations, alternatives, Advisor actions or modeled options.
 - Empty and partial reports can be exported with their coverage limitations.
   Missing financial values stay **Not supplied** (blank numeric CSV cells);
   they are never replaced with zero.
+- JSON exports omit the raw per-source `coverage` diagnostics and include
+  `collectionWarnings` only when collection is denied, unsupported, unavailable
+  or incomplete. CSV retains the `sourceCoverage` column for schema compatibility,
+  but it contains only concise warnings (blank for healthy connected collection).
+  Detailed collection diagnostics remain internal; financial evidence and
+  partial-completeness indicators are preserved.
 - The app does not collect service/resource-group cost breakdowns. It therefore
   does not fabricate the cost-by-service/resource-group charts shown in other
   report products. Its charts represent the Savings Plan data actually returned.
@@ -141,10 +149,11 @@ The screen, PDF, PowerPoint (`.pptx`) and CSV use the same normalized report:
   [Microsoft documents](https://learn.microsoft.com/en-us/azure/cost-management-billing/savings-plan/choose-commitment-amount)
   that Advisor Savings Plan recommendations use a 30-day lookback; the Benefit
   Recommendations API supports the app's 7/30/60-day selection.
-- Outputs include collection time, selected context, request filters, source API
-  versions, hashed evidence references, and per-source coverage. An empty response
-  is distinct from denied, unsupported, or unavailable. Partial collection remains
-  visibly partial; no invented recommendation or CSV model replaces missing data.
+- Reports include collection time, selected context, request filters, hashed
+  evidence references and actionable collection warnings, not raw API-version or
+  source-status diagnostics. Internally, an empty response remains distinct from
+  denied, unsupported or unavailable. Partial collection remains visibly partial;
+  no invented recommendation or CSV model replaces missing data.
 - Collection is read-only: the app does not refresh/generate Advisor recommendations,
   deploy resources, assign roles, or purchase/change a Savings Plan. Azure's cached
   recommendations can lag current workload changes; review them in Azure before purchase.
@@ -231,8 +240,8 @@ From the project directory:
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-windows.txt
 if ($LASTEXITCODE -ne 0) { throw 'Windows build dependency installation failed.' }
-.\scripts\Build-WindowsInstaller.ps1 -Python .\.venv\Scripts\python.exe -Version 0.7.0
-.\scripts\Test-WindowsInstaller.ps1 -Installer .\dist\installer\AzureSavingsPlanAdvisor-0.7.0-Setup-x64.exe
+.\scripts\Build-WindowsInstaller.ps1 -Python .\.venv\Scripts\python.exe -Version 0.7.1
+.\scripts\Test-WindowsInstaller.ps1 -Installer .\dist\installer\AzureSavingsPlanAdvisor-0.7.1-Setup-x64.exe
 ```
 
 The installer and checksum are written under `dist\installer`. The Windows
@@ -240,10 +249,10 @@ installer workflow also builds, tests installation/application launch/uninstall,
 and publishes these files when a version tag is pushed, when hosted runners
 are permitted. This repository's enterprise policy currently disables hosted
 runners; an enterprise administrator must enable them or provide an approved
-runner. Version 0.7.0 adds row-details popups and read-only compute inventory.
-It was built locally with 174 passing regression tests, successful bundled-app
-launch/close and a verified installer SHA-256 checksum. Live collection still
-requires validation with the intended tenant, selected subscriptions and RBAC.
+runner. Version 0.7.1 retains row-details popups and read-only compute inventory,
+while removing raw source-status diagnostics from the UI and reports.
+Live collection still requires validation with the intended tenant, selected
+subscriptions and RBAC.
 The install/uninstall smoke test requires a separate Windows test user if the
 app is already installed; it deliberately refuses to modify an existing install.
 Select the installer explicitly when several versions exist in the output folder.

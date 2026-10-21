@@ -18,7 +18,7 @@ from api.models import ForecastRequest, validate_request
 from api.azure_provider import ConnectedProviderError
 from api.desktop_azure import DesktopAzure
 from api.reporting import (
-    NAVY, PALE, SavingsReport, build_report, redacted_result, write_report,
+    NAVY, PALE, SavingsReport, build_report, collection_warnings, export_result, redacted_result, write_report,
 )
 from report_view import ReportView, apply_theme
 
@@ -69,11 +69,9 @@ def format_result(result: dict[str, Any]) -> str:
             result["notice"],
             "",
         ]
-        for source, coverage in result["coverage"].items():
-            lines.append(
-                f"{source}: {coverage['status']} - {coverage.get('message', '')} "
-                f"[{coverage.get('source', source)} / API {coverage.get('apiVersion', 'not supplied')}]"
-            )
+        warnings = collection_warnings(result)
+        if warnings:
+            lines.extend(["COLLECTION WARNINGS", *warnings])
         lines.extend(["", "SAVINGS PLAN HOURLY COMMITMENTS (Azure Cost Management)"])
         if not result["recommendations"]:
             lines.append("No hourly commitment is available. Review source coverage above; no estimate was substituted.")
@@ -651,7 +649,7 @@ class AdvisorWindow:
         )
         if path:
             try:
-                Path(path).write_text(json.dumps(self.result, indent=2, allow_nan=False), encoding="utf-8")
+                Path(path).write_text(json.dumps(export_result(self.result), indent=2, allow_nan=False), encoding="utf-8")
             except (OSError, ValueError) as exc:
                 messagebox.showerror("Export failed", str(exc), parent=self.root)
 

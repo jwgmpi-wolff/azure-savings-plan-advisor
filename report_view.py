@@ -104,6 +104,7 @@ class ReportView(ttk.Frame):
         self.report = None
         self.subtitle.configure(text="Report cleared. Run analysis for the current context.")
         self.coverage.configure(text="")
+        self.coverage.pack_forget()
         self.model_guidance.configure(text="")
         for title, value in self.cards:
             title.configure(text="Awaiting report")
@@ -120,6 +121,8 @@ class ReportView(ttk.Frame):
             title.configure(text=label)
             value.configure(text=text)
         self.coverage.configure(text="\n".join(report.coverage))
+        if report.coverage:
+            self.coverage.pack(before=self.footnote, anchor="w", pady=(8, 0))
         self.table.configure(displaycolumns=(
             ("label", "runtime", "baseline", "cost", "savings", "breakeven", "currency", "commitment",
              "period", "unused", "percent", "coverage", "utilization", "term", "type")
@@ -203,7 +206,7 @@ class ReportView(ttk.Frame):
             "Savings percentage is the overall estimated saving, not a per-SKU discount. "
             "Offline discounts are user assumptions, not verified Azure pricing; CSV model assumptions are listed below.",
             "", "FULL ROW DETAILS", *record_lines(record),
-            "", "SOURCE COVERAGE", *self.report.coverage,
+            *(["", "COLLECTION NOTES", *self.report.coverage] if self.report.coverage else []),
             "", "LIMITATIONS AND ASSUMPTIONS", *self.report.notices,
         ]
         text.insert("1.0", "\n".join(lines))

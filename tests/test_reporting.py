@@ -8,7 +8,7 @@ from pypdf import PdfReader
 
 from api.reporting import (
     build_report, chart_records, clean_text, export_csv, export_pdf,
-    export_powerpoint, redacted_result, write_report, report_charts,
+    export_powerpoint, export_result, redacted_result, write_report, report_charts,
 )
 from desktop_app import analyze_csv_file
 from api.compute_modeler import calculate_compute_model
@@ -94,6 +94,67 @@ def test_report_preserves_azure_values_and_missing_is_not_zero(connected_result)
     assert len(chart_records(report)) == 1
     assert any("denied" in line for line in report.coverage)
 
+@pytest.mark.parametrize("kind,reader", [
+    ("pdf", text_from_pdf), ("pptx", text_from_powerpoint),
+    ("csv", lambda path: path.read_text(encoding="utf-8-sig")),
+])
+@pytest.mark.parametrize("partial", [False, True])
+def test_reports_suppress_raw_collection_diagnostics_but_keep_failures(connected_result, tmp_path, kind, reader, partial):
+    connected_result["coverage"] = {
+        "synthetic-subscription/advisor": {
+            "status": "denied" if partial else "ok", "source": "technical-source-marker",
+            "apiVersion": "2025-01-01", "message": "verbose-diagnostic-marker",
+            "subscriptionName": "Synthetic Finance",
+        },
+        "synthetic-subscription/savingsPlan": {"status": "ok", "apiVersion": "2026-06-01"},
+        "synthetic-subscription/virtualMachines": {"status": "empty", "apiVersion": "2024-07-01"},
+    }
+    connected_result["completeness"] = "partial" if partial else "complete"
+    report = build_report(connected_result)
+    assert len(report.coverage) == (1 if partial else 0)
+    path = tmp_path / f"quiet.{kind}"
+    write_report(report, path, kind)
+    text = reader(path)
+    for unwanted in (
+        "technical-source-marker", "verbose-diagnostic-marker", "2025-01-01",
+        "2026-06-01", "2024-07-01", "synthetic-subscription/advisor",
+        "synthetic-subscription/virtualMachines", "synthetic-subscription/savingsPlan",
+    ):
+        assert unwanted not in text
+    assert "evidence-001" in text
+    assert "123.45" in text
+    if partial:
+        assert "Synthetic Finance" in text
+        assert "access denied" in text and "Request Reader access" in text
+    else:
+        assert "access denied" not in text
+    if kind == "csv":
+        rows = list(csv.DictReader(path.open(encoding="utf-8-sig", newline="")))
+        assert bool(rows[0]["sourceCoverage"]) == partial
+
+
+@pytest.mark.parametrize("status,expected", [
+    ("ok", None), ("empty", None), ("denied", "access denied"),
+    ("unsupported", "not supported"), ("unavailable", "temporarily unavailable"),
+    ("unexpected", "collection incomplete"),
+])
+def test_json_export_omits_technical_coverage_and_preserves_actionable_warnings(connected_result, status, expected):
+    connected_result["coverage"] = {
+        "synthetic-subscription/virtualMachines": {
+            "status": status, "apiVersion": "2024-07-01", "message": "raw-diagnostic",
+        },
+    }
+    original = copy.deepcopy(connected_result)
+    exported = export_result(connected_result)
+    assert "coverage" not in exported
+    assert connected_result == original
+    assert exported["recommendations"] == connected_result["recommendations"]
+    if expected:
+        assert expected in exported["collectionWarnings"][0]
+    else:
+        assert "collectionWarnings" not in exported
+    assert build_report(exported).coverage == build_report(connected_result).coverage
+
 def test_report_preserves_benefit_metadata_without_inventing_compute_or_discount(connected_result, tmp_path):
     recommendation = connected_result["recommendations"][0]
     recommendation.update(kind="SavingsPlan", armSkuName="Synthetic_Plan_SKU")
@@ -167,7 +228,7 @@ def test_executive_exports_include_values_sources_evidence_and_partial_coverage(
     exporter(report, path)
     text = reader(path)
     for expected in ["Savings plans", "4.25", "123.45", "evidence-001", "partial", "denied",
-                     "2026-01-01", "synthetic-subscription", "2026-06-01", "not additive", "alternative"]:
+                     "2026-01-01", "synthetic-subscription", "not additive", "alternative"]:
         assert expected in text
     assert path.stat().st_size > 1000
 

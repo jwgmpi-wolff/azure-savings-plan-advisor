@@ -110,6 +110,42 @@ class SavingsReport:
     metrics: tuple[tuple[str, str], ...]
 
 
+def collection_warnings(result: dict[str, Any]) -> tuple[str, ...]:
+    labels = {
+        "advisor": "Advisor recommendations", "savingsPlan": "Savings Plan recommendations",
+        "virtualMachines": "Virtual machine inventory",
+        "virtualMachineScaleSets": "VM scale set inventory", "appServicePlans": "App Service plan inventory",
+    }
+    guidance = {
+        "denied": "access denied. Request Reader access and the applicable Cost Management read permissions.",
+        "unsupported": "not supported at this scope. Check service availability and billing eligibility.",
+        "unavailable": "temporarily unavailable. Retry the report; results may be incomplete.",
+    }
+    if "coverage" not in result:
+        return tuple(clean_text(value) for value in result.get("collectionWarnings", []))
+    warnings = []
+    for key, item in sorted(result["coverage"].items()):
+        status = item.get("status")
+        if status in ("ok", "empty"):
+            continue
+        label = labels.get(key.rsplit("/", 1)[-1], "Data collection")
+        subscription = item.get("subscriptionName")
+        scope = f"{clean_text(subscription)} - " if subscription else ""
+        message = guidance.get(status, "collection incomplete. Retry the report or check read permissions.")
+        warnings.append(f"{scope}{label}: {message}")
+    return tuple(dict.fromkeys(warnings))
+
+
+def export_result(result: dict[str, Any]) -> dict[str, Any]:
+    exported = redacted_result(result)
+    if exported.get("mode") == "connected":
+        warnings = collection_warnings(exported)
+        exported.pop("coverage", None)
+        if warnings:
+            exported["collectionWarnings"] = list(warnings)
+    return exported
+
+
 def build_report(result: dict[str, Any]) -> SavingsReport:
     result = redacted_result(result)
     mode = result["mode"]
@@ -124,12 +160,7 @@ def build_report(result: dict[str, Any]) -> SavingsReport:
             context.append(f"{key}: {clean_text(', '.join(value) if isinstance(value, list) else value)}")
         for key, value in sorted(result.get("filters", {}).items()):
             context.append(f"{key}: {clean_text(value)}")
-        for key, item in sorted(result["coverage"].items()):
-            coverage.append(
-                f"{key}: {clean_text(item['status'])} | {clean_text(item.get('source'))}"
-                f" | API {clean_text(item.get('apiVersion'))} | {clean_text(item.get('message', ''))}"
-                + (f" | Subscription: {clean_text(item['subscriptionName'])}" if item.get("subscriptionName") else "")
-            )
+        coverage.extend(collection_warnings(result))
         for recommendation in result["recommendations"]:
             details = recommendation.get("recommendationDetails", {})
             base = {

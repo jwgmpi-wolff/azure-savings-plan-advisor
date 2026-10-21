@@ -124,7 +124,7 @@ def test_row_details_click_keyboard_and_invalidation(tk_root, mode):
     text = popup_text()
     assert "Compute type: Not supplied" in text
     assert "Compute SKU: Not supplied" in text
-    assert "SOURCE COVERAGE" in text
+    assert "COLLECTION NOTES" in text
     assert "per-SKU discount" in text
     if mode == "connected":
         assert "Synthetic_Plan_SKU" in text and "synthetic-evidence" in text
@@ -164,6 +164,55 @@ def test_row_details_click_keyboard_and_invalidation(tk_root, mode):
     assert view.details_window is None
     view.show_row_details("0")
     assert view.details_window is None
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_desktop_suppresses_collection_noise_in_dashboard_details_and_json(tk_root, tmp_path, partial):
+    from tkinter.scrolledtext import ScrolledText
+    from api.reporting import export_result
+
+    result = {
+        "mode": "connected", "collectedAt": "2026-01-01T00:00:00Z",
+        "completeness": "partial" if partial else "complete",
+        "filters": {"term": "P1Y", "lookbackPeriod": "Last30Days"},
+        "notice": "Synthetic fixture only.",
+        "coverage": {
+            "synthetic-subscription/advisor": {
+                "status": "denied" if partial else "ok",
+                "source": "technical-source-marker", "apiVersion": "2025-01-01",
+                "message": "verbose-diagnostic-marker", "subscriptionName": "Synthetic Finance",
+            },
+            "synthetic-subscription/virtualMachines": {"status": "empty", "apiVersion": "2024-07-01"},
+        },
+        "recommendations": [{
+            "recommendationReference": "synthetic-evidence", "term": "P1Y", "currencyCode": "USD",
+            "recommendationDetails": {"commitmentAmount": 4.25},
+        }], "advisorRecommendations": [],
+    }
+    window = AdvisorWindow(tk_root)
+    window.show_result(result)
+    output = window.output.get("1.0", "end")
+    coverage = window.dashboard.coverage.cget("text")
+    window.dashboard.show_row_details("0")
+    frame = window.dashboard.details_window.winfo_children()[0]
+    details = next(
+        widget for child in frame.winfo_children() for widget in child.winfo_children()
+        if isinstance(widget, ScrolledText)
+    ).get("1.0", "end")
+    for text in (output, coverage, details):
+        for unwanted in ("technical-source-marker", "verbose-diagnostic-marker", "2025-01-01",
+                         "2024-07-01", "synthetic-subscription/advisor"):
+            assert unwanted not in text
+    assert bool(coverage) == partial
+    assert bool(window.dashboard.coverage.winfo_manager()) == partial
+    assert ("COLLECTION NOTES" in details) == partial
+    assert "synthetic-evidence" in details and "4.25" in details
+    if partial:
+        assert "access denied" in output and "Synthetic Finance" in coverage
+    destination = tmp_path / "quiet.json"
+    with patch("desktop_app.filedialog.asksaveasfilename", return_value=str(destination)):
+        window.save()
+    assert json.loads(destination.read_text(encoding="utf-8")) == export_result(result)
+    assert window.result == result
 
 
 @pytest.mark.parametrize("invalid", [float("nan"), float("inf"), -101])
