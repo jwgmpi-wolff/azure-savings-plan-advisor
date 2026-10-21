@@ -6,8 +6,10 @@ import re
 from datetime import datetime, timezone
 from math import isfinite
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
+from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential, OnBehalfOfCredential
 
 from .models import LOOKBACK_PERIODS, RECOMMENDATION_SCOPES, TERMS
@@ -47,6 +49,68 @@ _PROPERTY_FIELDS = (
 
 class ConnectedProviderError(Exception):
     """A sanitized error communicating with Azure Cost Management."""
+
+    def __init__(self, message: str, status: str = "unavailable") -> None:
+        super().__init__(message)
+        self.status = status
+
+
+def arm_list(
+    url: str, token: str, params: dict[str, str], source: str,
+) -> list[dict[str, Any]]:
+    expected = urlsplit(url)
+    items: list[dict[str, Any]] = []
+    visited: set[str] = set()
+    while url:
+        target = urlsplit(url)
+        if (
+            target.scheme != "https"
+            or target.netloc != "management.azure.com"
+            or target.path.rstrip("/").lower() != expected.path.rstrip("/").lower()
+            or target.fragment
+            or url in visited
+            or len(visited) >= 100
+        ):
+            raise ConnectedProviderError(f"{source} returned an unsafe or excessive continuation.")
+        visited.add(url)
+        try:
+            response = requests.get(
+                url, params=params, headers={"Authorization": "Bearer " + token},
+                timeout=60, allow_redirects=False,
+            )
+            status = getattr(response, "status_code", 200)
+            if status in (401, 403):
+                raise ConnectedProviderError(
+                    f"{source}: access denied (HTTP {status}). Sign in to the selected tenant "
+                    "and request the required read permission at the selected scope.",
+                    status="denied",
+                )
+            if status == 404:
+                raise ConnectedProviderError(
+                    f"{source}: unavailable at this scope (HTTP 404). Check API and billing eligibility.",
+                    status="unsupported",
+                )
+            if status == 429:
+                raise ConnectedProviderError(f"{source}: throttled (HTTP 429). Retry later.")
+            if 300 <= status < 400:
+                raise ConnectedProviderError(f"{source} returned an unsupported redirect.")
+            response.raise_for_status()
+            payload = response.json()
+        except requests.RequestException as exc:
+            raise ConnectedProviderError(f"{source} is unavailable. Retry or check your network and Azure service status.") from exc
+        except ValueError as exc:
+            raise ConnectedProviderError(f"{source} returned invalid JSON.") from exc
+        if not isinstance(payload, dict) or not isinstance(payload.get("value"), list):
+            raise ConnectedProviderError(f"{source} returned an unexpected response shape.")
+        if any(not isinstance(item, dict) for item in payload["value"]):
+            raise ConnectedProviderError(f"{source} returned malformed records.")
+        items.extend(payload["value"])
+        next_link = payload.get("nextLink")
+        if next_link is not None and not isinstance(next_link, str):
+            raise ConnectedProviderError(f"{source} returned an invalid continuation.")
+        url = next_link or ""
+        params = {}
+    return items
 
 
 def _safe_primitive(value: Any) -> bool:
@@ -163,6 +227,8 @@ def get_benefit_recommendations(
     lookback: str,
     recommendation_scope: str,
     authorization_header: str | None = None,
+    *,
+    credential: TokenCredential | None = None,
 ) -> dict[str, Any]:
     scope = _validate_scope(scope)
     if term not in TERMS:
@@ -176,7 +242,10 @@ def get_benefit_recommendations(
             "recommendationScope must be Single or Shared."
         )
 
-    token = _authorization_token(authorization_header)
+    token = (
+        credential.get_token(MANAGEMENT_RESOURCE).token
+        if credential is not None else _authorization_token(authorization_header)
+    )
     url = (
         f"https://management.azure.com{scope}"
         "/providers/Microsoft.CostManagement/benefitRecommendations"
@@ -190,31 +259,10 @@ def get_benefit_recommendations(
         ),
         "$expand": "properties/allRecommendationDetails",
     }
-    try:
-        response = requests.get(
-            url,
-            params=params,
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=60,
-        )
-        response.raise_for_status()
-        payload = response.json()
-    except requests.RequestException as exc:
-        raise ConnectedProviderError(
-            "Azure Cost Management could not return benefit recommendations."
-        ) from exc
-    except ValueError as exc:
-        raise ConnectedProviderError(
-            "Azure Cost Management returned an invalid response."
-        ) from exc
-
-    if not isinstance(payload, dict) or not isinstance(payload.get("value"), list):
-        raise ConnectedProviderError(
-            "Azure Cost Management returned an unexpected response shape."
-        )
+    items = arm_list(url, token, params, "Azure Cost Management")
     recommendations = [
         _normalize_recommendation(item)
-        for item in payload["value"]
+        for item in items
         if isinstance(item, dict) and item.get("kind") == "SavingsPlan"
     ]
     return {

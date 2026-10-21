@@ -1,6 +1,6 @@
 # Azure Savings Plan Advisor
 
-**Windows app:** [Download the Windows x64 app installer](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/download/v0.2.0/AzureSavingsPlanAdvisor-0.2.0-Setup-x64.exe).
+**Windows app:** [Download the Windows x64 app installer](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/download/v0.3.0/AzureSavingsPlanAdvisor-0.3.0-Setup-x64.exe).
 For API development, see [prerequisite installers](#windows-installers)
 and [local development](#local-development).
 
@@ -16,23 +16,67 @@ User -> Copilot Studio -> Entra-authenticated REST API -> Azure Function
 ## Install the Windows app
 
 1. Open [the latest release](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/latest)
-   and download **AzureSavingsPlanAdvisor-0.2.0-Setup-x64.exe** from Assets.
+   and download **AzureSavingsPlanAdvisor-0.3.0-Setup-x64.exe** from Assets.
    Sign into GitHub with repository access; this repository is private.
 2. Run the installer on Windows 10/11 x64. It installs for your current user,
    creates a Start menu shortcut, and optionally creates a desktop shortcut.
-   Python, Node.js, Azure CLI, and Functions Core Tools are **not required**
-   to run the installed desktop app.
-3. Open **Azure Savings Plan Advisor** from Start, select your hourly CSV,
-   choose what-if or comparison, and enter your approved assumptions.
-   The installation's `samples` folder contains a synthetic CSV for trying it.
-4. Select **Analyze**, review the assumptions and warnings, and optionally
-   save the result as JSON.
+   Python is bundled. Node.js and Functions Core Tools are **not required**.
+   Install [Azure CLI for Windows](https://aka.ms/installazurecliwindows) for
+   Azure-connected features, then restart the app so it can find `az`.
+3. Open **Azure Savings Plan Advisor** from Start. **Connected** is the default.
+   Select **Sign in / switch tenant** and complete Entra sign-in in your browser.
+   Leave the tenant blank for initial sign-in, or enter/select an approved tenant
+   GUID to switch directories, including guest directories.
+4. Select an accessible subscription explicitly, choose P1Y/P3Y and the lookback,
+   then select **Analyze**. **No CSV or assumed discount is required.**
+5. Review Azure Advisor Cost actions and Azure Cost Management Savings Plan
+   hourly commitment recommendations. Optionally save the result as JSON.
 
-The desktop app performs local, offline what-if and comparison analysis using
-the same calculation engine as the API. It does not transmit CSV data or
-authenticate to Azure. Connected Cost Management recommendations still require
-the separately deployed Entra-authenticated API described below. It never
-purchases or changes a Savings Plan.
+### Azure context, permissions, and recommendation sources
+
+- **Refresh context** uses an existing Azure CLI user sign-in to discover tenants
+  and enabled subscriptions. A blank tenant uses the current CLI user's context.
+  Only subscriptions belonging to the selected tenant are offered. Membership
+  is rechecked before every collection; a service-principal CLI login is rejected.
+- Switching tenant/subscription clears previous results and disables stale exports.
+  The app does not call `az account set`; requests use a tenant-specific delegated
+  credential and the explicitly selected subscription. Sign-in may update the
+  shared Azure CLI account cache. **Disconnect app** clears app state only; use
+  `az logout` separately if you intend to clear CLI credentials.
+- The desktop app calls Azure directly; no Function deployment or API client
+  secret is required. The separate Copilot/Function deployment remains supported.
+  Only public Azure (`management.azure.com`) is supported by this desktop version.
+- Grant only the read access needed at the selected subscription. Azure Advisor
+  reading requires `Microsoft.Advisor/recommendations/read` (included in Reader);
+  Cost Management recommendations require the appropriate Cost Management read
+  access, for example Cost Management Reader, subject to billing agreement and
+  cost visibility settings. Role assignment does not guarantee billing eligibility.
+- [Azure Advisor](https://learn.microsoft.com/en-us/rest/api/advisor/recommendations/list)
+  provides **cached Cost recommendations** for existing workloads. Not every Cost
+  action is a Savings Plan, and the app does not add Advisor savings to benefit
+  savings or assume each action applies to the requested term.
+- The [Benefit Recommendations API](https://learn.microsoft.com/en-us/rest/api/cost-management/benefit-recommendations/list)
+  supplies Microsoft's recommended hourly commitment, savings, coverage and
+  utilization, with any returned alternative commitments. The desktop uses
+  **Single/subscription scope**; shared billing scope remains an API capability.
+  [Microsoft documents](https://learn.microsoft.com/en-us/azure/cost-management-billing/savings-plan/choose-commitment-amount)
+  that Advisor Savings Plan recommendations use a 30-day lookback; the Benefit
+  Recommendations API supports the app's 7/30/60-day selection.
+- Outputs include collection time, selected context, request filters, source API
+  versions, hashed evidence references, and per-source coverage. An empty response
+  is distinct from denied, unsupported, or unavailable. Partial collection remains
+  visibly partial; no invented recommendation or CSV model replaces missing data.
+- Collection is read-only: the app does not refresh/generate Advisor recommendations,
+  deploy resources, assign roles, or purchase/change a Savings Plan. Azure's cached
+  recommendations can lag current workload changes; review them in Azure before purchase.
+
+### Optional CSV modeling
+
+Choose **what-if** or **comparison** to model a separate scenario from your own
+hourly CSV and explicit discount/usage assumptions. CSV is required **only for
+these offline modes**, never for connected analysis. The installation's `samples`
+folder contains a synthetic CSV for trying offline modeling. These estimates
+remain clearly distinct from live Azure recommendations, and CSV data is not uploaded.
 
 The installer is currently **unsigned**; Windows SmartScreen may show a warning
 or organizational policy may block it. Verify the release's `SHA256SUMS.txt`
@@ -49,7 +93,7 @@ From the project directory:
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-windows.txt
 if ($LASTEXITCODE -ne 0) { throw 'Windows build dependency installation failed.' }
-.\scripts\Build-WindowsInstaller.ps1 -Python .\.venv\Scripts\python.exe -Version 0.2.0
+.\scripts\Build-WindowsInstaller.ps1 -Python .\.venv\Scripts\python.exe -Version 0.3.0
 .\scripts\Test-WindowsInstaller.ps1
 ```
 

@@ -1,6 +1,10 @@
 param([string]$Installer)
 
 $ErrorActionPreference = 'Stop'
+$existingInstall = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{7AD40C31-D6C5-45CE-AF99-FC90FA34F28E}_is1'
+if (Test-Path -LiteralPath $existingInstall) {
+    throw 'An advisor app is already installed for this user. Run installer verification under a separate test user.'
+}
 if (-not $Installer) {
     $installers = @(Get-ChildItem -LiteralPath "$PSScriptRoot\..\dist\installer" -Filter '*-Setup-x64.exe')
     if ($installers.Count -ne 1) { throw 'Provide exactly one installer to test.' }

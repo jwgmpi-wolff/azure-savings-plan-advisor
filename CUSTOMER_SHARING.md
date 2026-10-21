@@ -14,6 +14,13 @@ sharing or deploying:
       presented as a price quote.
 - [ ] Keep connected Cost Management recommendations distinct from what-if
       and comparison estimates.
+- [ ] For the Windows app, verify Azure CLI user sign-in, tenant switching,
+      subscription membership filtering, and Advisor/Cost Management read RBAC.
+      Connected desktop analysis must work without a CSV. Explain that CLI
+      credentials are shared with the user's CLI and Disconnect only clears app
+      context. The desktop does not require a separately deployed Function.
+- [ ] Test the released Windows installer and checksum, including application
+      launch/uninstall under an isolated test user. Disclose that it is unsigned.
 - [ ] Configure the customer's Entra app registration, OAuth scope, delegated
       Azure Resource Manager permission, consent, and redirect URI through the
       approved identity process.

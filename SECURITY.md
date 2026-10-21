@@ -53,10 +53,24 @@
 
 ## Windows desktop app
 
-- The Windows app runs offline calculations only. It does not collect Azure
-  credentials, call Azure APIs, send telemetry, or upload CSV files.
+- The Windows app uses the Azure CLI's interactive user sign-in for direct,
+  read-only Azure Advisor and Cost Management access. It does not use a managed
+  identity, client secret, or service-principal fallback. Tokens stay in memory
+  and are not included in app exports, logs, or configuration.
+- Tenant and subscription membership are validated before collection. Requests
+  use an explicitly tenant-bound user credential, not a global subscription
+  selection. Switching context invalidates results and exports. The Azure CLI's
+  shared credential cache is managed by Azure CLI; disconnecting the app does
+  not sign out other CLI users or sessions.
+- ARM pagination stays on the same HTTPS host and collection path. Redirects,
+  loops, and cross-scope continuation links are rejected before forwarding tokens.
+- The app does not send telemetry or upload CSV files. Offline CSV modes remain
+  separate from live recommendations, with no silent fallback on Azure failures.
 - Input files are read locally; results are written only to the JSON export
   location selected by the user. Protect these files as financial data.
+- Connected exports intentionally include selected tenant/subscription context
+  for provenance and allowlisted Advisor descriptions, which may contain workload
+  details. Review/redact these before sharing. Raw Azure responses are not exported.
 - The per-user installer bundles Python and dependencies and does not require
   administrator rights. Releases include a SHA-256 checksum.
 - Installers are currently unsigned. Code signing and organizational deployment

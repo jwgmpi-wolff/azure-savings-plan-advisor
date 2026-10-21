@@ -23,7 +23,7 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: |
-          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '0.2.0' }
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '0.3.0' }
           .\scripts\Build-WindowsInstaller.ps1 -Version $version
       - name: Verify install, application launch, and uninstall
         shell: pwsh
@@ -41,5 +41,5 @@ jobs:
         run: |
           gh release create $env:GITHUB_REF_NAME .\dist\installer\*.exe .\dist\installer\SHA256SUMS.txt `
             --verify-tag --title "Azure Savings Plan Advisor $env:GITHUB_REF_NAME - Windows app" `
-            --notes "Windows x64 desktop app installer. Bundles Python and dependencies; no prerequisite installs or Azure login needed for offline analysis. Supports CSV what-if and comparison estimates. Unsigned installer: Windows SmartScreen may warn. Connected Azure recommendations require the separately deployed authenticated API. SHA256SUMS.txt contains the installer checksum."
+            --notes "Windows x64 app with Azure-connected analysis by default. Reads Azure Advisor Cost recommendations and Cost Management Savings Plan hourly commitments. CSV is optional for offline what-if/comparison only. Azure CLI is required for Entra user sign-in, tenant switching and subscription discovery; Python is bundled. Collection is read-only and reports empty, denied, unsupported and unavailable coverage separately. Unsigned installer: Windows SmartScreen may warn. SHA256SUMS.txt contains the installer checksum."
           if ($LASTEXITCODE -ne 0) { throw 'GitHub release publication failed.' }
