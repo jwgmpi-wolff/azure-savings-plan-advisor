@@ -15,3 +15,10 @@ SECURITY.md
 CUSTOMER_SHARING.md
 local.settings.example.json
 requirements-dev.txt
+requirements-windows.txt
+desktop_app.py
+installer/
+scripts/
+build/
+dist/
+*.spec

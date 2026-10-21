@@ -51,6 +51,18 @@
 - The API is decision support only and never performs Savings Plan purchases,
   modifications, exchanges, cancellations, or renewals.
 
+## Windows desktop app
+
+- The Windows app runs offline calculations only. It does not collect Azure
+  credentials, call Azure APIs, send telemetry, or upload CSV files.
+- Input files are read locally; results are written only to the JSON export
+  location selected by the user. Protect these files as financial data.
+- The per-user installer bundles Python and dependencies and does not require
+  administrator rights. Releases include a SHA-256 checksum.
+- Installers are currently unsigned. Code signing and organizational deployment
+  approval are separate requirements; do not bypass endpoint security policies.
+- Uninstall removes application files, not user-selected input or export files.
+
 Report security concerns privately to the repository owner or through the
 repository's private vulnerability reporting process. Do not disclose
 vulnerabilities in public issues.

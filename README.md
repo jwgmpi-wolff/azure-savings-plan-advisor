@@ -1,7 +1,8 @@
 # Azure Savings Plan Advisor
 
-**Windows setup:** [Download prerequisite installers](#windows-installers)
-and follow the [local development steps](#local-development).
+**Windows app:** [Download the Windows x64 app installer](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/download/v0.2.0/AzureSavingsPlanAdvisor-0.2.0-Setup-x64.exe).
+For API development, see [prerequisite installers](#windows-installers)
+and [local development](#local-development).
 
 A Copilot Studio-ready planning API backed by a Python Azure Function. It keeps
 the conversation separate from financial calculations and connected
@@ -11,6 +12,51 @@ recommendations:
 User -> Copilot Studio -> Entra-authenticated REST API -> Azure Function
                                                     -> Cost Management API
 ```
+
+## Install the Windows app
+
+1. Open [the latest release](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/latest)
+   and download **AzureSavingsPlanAdvisor-0.2.0-Setup-x64.exe** from Assets.
+   Sign into GitHub with repository access; this repository is private.
+2. Run the installer on Windows 10/11 x64. It installs for your current user,
+   creates a Start menu shortcut, and optionally creates a desktop shortcut.
+   Python, Node.js, Azure CLI, and Functions Core Tools are **not required**
+   to run the installed desktop app.
+3. Open **Azure Savings Plan Advisor** from Start, select your hourly CSV,
+   choose what-if or comparison, and enter your approved assumptions.
+   The installation's `samples` folder contains a synthetic CSV for trying it.
+4. Select **Analyze**, review the assumptions and warnings, and optionally
+   save the result as JSON.
+
+The desktop app performs local, offline what-if and comparison analysis using
+the same calculation engine as the API. It does not transmit CSV data or
+authenticate to Azure. Connected Cost Management recommendations still require
+the separately deployed Entra-authenticated API described below. It never
+purchases or changes a Savings Plan.
+
+The installer is currently **unsigned**; Windows SmartScreen may show a warning
+or organizational policy may block it. Verify the release's `SHA256SUMS.txt`
+and publisher/source before running; do not bypass your organization's policy.
+Check a downloaded file with `Get-FileHash -Algorithm SHA256`.
+Uninstall through Windows **Settings > Apps > Installed apps**. Exported results
+and your input CSV files are not removed.
+
+### Build the Windows installer from source
+
+Use Windows x64 with Python 3.11 and [Inno Setup 6](https://jrsoftware.org/isdl.php).
+From the project directory:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-windows.txt
+if ($LASTEXITCODE -ne 0) { throw 'Windows build dependency installation failed.' }
+.\scripts\Build-WindowsInstaller.ps1 -Python .\.venv\Scripts\python.exe -Version 0.2.0
+.\scripts\Test-WindowsInstaller.ps1
+```
+
+The installer and checksum are written under `dist\installer`. The Windows
+installer workflow also builds, tests installation/application launch/uninstall,
+and publishes these files when a version tag is pushed. Signing requires a
+separately provisioned code-signing certificate; none is stored in this repo.
 
 ## Decision-support boundary
 

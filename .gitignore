@@ -7,3 +7,6 @@ local.settings.json
 .DS_Store
 azurite-data/
 azurite-debug.log
+build/
+dist/
+*.spec

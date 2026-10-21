@@ -1,0 +1,45 @@
+name: Windows app installer
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: x64
+      - name: Install build and test dependencies
+        run: python -m pip install -r requirements-dev.txt -r requirements-windows.txt
+      - name: Run tests
+        run: python -m pytest -q
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '0.2.0' }
+          .\scripts\Build-WindowsInstaller.ps1 -Version $version
+      - name: Verify install, application launch, and uninstall
+        shell: pwsh
+        run: .\scripts\Test-WindowsInstaller.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Windows-app-installer
+          path: dist/installer/*
+          if-no-files-found: error
+      - name: Publish release downloads
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release create $env:GITHUB_REF_NAME .\dist\installer\*.exe .\dist\installer\SHA256SUMS.txt `
+            --verify-tag --title "Azure Savings Plan Advisor $env:GITHUB_REF_NAME - Windows app" `
+            --notes "Windows x64 desktop app installer. Bundles Python and dependencies; no prerequisite installs or Azure login needed for offline analysis. Supports CSV what-if and comparison estimates. Unsigned installer: Windows SmartScreen may warn. Connected Azure recommendations require the separately deployed authenticated API. SHA256SUMS.txt contains the installer checksum."
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub release publication failed.' }
