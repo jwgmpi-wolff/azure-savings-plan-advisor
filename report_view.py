@@ -120,7 +120,9 @@ class ReportView(ttk.Frame):
         for (title, value), (label, text) in zip(self.cards, report.metrics):
             title.configure(text=label)
             value.configure(text=text)
-        self.coverage.configure(text="\n".join(report.coverage))
+        self.coverage.configure(text="\n".join(report.coverage) + (
+            " See the Log tab for collection details." if report.mode == "connected" and report.coverage else ""
+        ))
         if report.coverage:
             self.coverage.pack(before=self.footnote, anchor="w", pady=(8, 0))
         self.table.configure(displaycolumns=(

@@ -8,7 +8,7 @@ from pypdf import PdfReader
 
 from api.reporting import (
     build_report, chart_records, clean_text, export_csv, export_pdf,
-    export_powerpoint, export_result, redacted_result, write_report, report_charts,
+    collection_warnings, export_powerpoint, export_result, redacted_result, write_report, report_charts,
 )
 from desktop_app import analyze_csv_file
 from api.compute_modeler import calculate_compute_model
@@ -92,7 +92,7 @@ def test_report_preserves_azure_values_and_missing_is_not_zero(connected_result)
     assert report.metrics[0][1] == "1"
     assert report.metrics[2][1] == "partial"
     assert len(chart_records(report)) == 1
-    assert any("denied" in line for line in report.coverage)
+    assert any("incomplete" in line for line in report.coverage)
 
 @pytest.mark.parametrize("kind,reader", [
     ("pdf", text_from_pdf), ("pptx", text_from_powerpoint),
@@ -110,6 +110,11 @@ def test_reports_suppress_raw_collection_diagnostics_but_keep_failures(connected
         "synthetic-subscription/virtualMachines": {"status": "empty", "apiVersion": "2024-07-01"},
     }
     connected_result["completeness"] = "partial" if partial else "complete"
+    if partial:
+        for index in range(70):
+            connected_result["coverage"][f"synthetic-subscription-{index}/savingsPlan"] = {
+                "status": "denied", "subscriptionName": f"Synthetic failed subscription {index}",
+            }
     report = build_report(connected_result)
     assert len(report.coverage) == (1 if partial else 0)
     path = tmp_path / f"quiet.{kind}"
@@ -124,8 +129,10 @@ def test_reports_suppress_raw_collection_diagnostics_but_keep_failures(connected
     assert "evidence-001" in text
     assert "123.45" in text
     if partial:
-        assert "Synthetic Finance" in text
-        assert "access denied" in text and "Request Reader access" in text
+        assert "incomplete" in text
+        assert "Synthetic Finance" not in text
+        assert "Synthetic failed subscription" not in text
+        assert "access denied" not in text and "Request Reader access" not in text
     else:
         assert "access denied" not in text
     if kind == "csv":
@@ -138,22 +145,36 @@ def test_reports_suppress_raw_collection_diagnostics_but_keep_failures(connected
     ("unsupported", "not supported"), ("unavailable", "temporarily unavailable"),
     ("unexpected", "collection incomplete"),
 ])
-def test_json_export_omits_technical_coverage_and_preserves_actionable_warnings(connected_result, status, expected):
+def test_json_export_omits_log_entries_and_preserves_incomplete_summary(connected_result, status, expected):
     connected_result["coverage"] = {
         "synthetic-subscription/virtualMachines": {
             "status": status, "apiVersion": "2024-07-01", "message": "raw-diagnostic",
         },
     }
+    connected_result["completeness"] = "complete" if status in ("ok", "empty") else "partial"
     original = copy.deepcopy(connected_result)
     exported = export_result(connected_result)
     assert "coverage" not in exported
     assert connected_result == original
     assert exported["recommendations"] == connected_result["recommendations"]
+    assert "collectionWarnings" not in exported
     if expected:
-        assert expected in exported["collectionWarnings"][0]
+        assert "incomplete" in exported["collectionSummary"]
+        assert expected in collection_warnings(connected_result)[0]
     else:
-        assert "collectionWarnings" not in exported
+        assert "collectionSummary" not in exported
     assert build_report(exported).coverage == build_report(connected_result).coverage
+
+@pytest.mark.parametrize("legacy_entries", [[], ["Synthetic Finance - access denied. Request Reader access."]])
+def test_partial_json_keeps_summary_without_reexporting_legacy_log_entries(connected_result, legacy_entries):
+    connected_result.pop("coverage")
+    connected_result["collectionWarnings"] = legacy_entries
+    connected_result["completeness"] = "partial"
+    exported = export_result(connected_result)
+    assert "collectionWarnings" not in exported and "coverage" not in exported
+    assert exported["collectionSummary"] == "Data collection is incomplete. Some data could not be collected."
+    assert build_report(exported).coverage == (exported["collectionSummary"],)
+    assert "Synthetic Finance" not in str(exported)
 
 def test_report_preserves_benefit_metadata_without_inventing_compute_or_discount(connected_result, tmp_path):
     recommendation = connected_result["recommendations"][0]
@@ -227,7 +248,7 @@ def test_executive_exports_include_values_sources_evidence_and_partial_coverage(
     path = tmp_path / f"report.{kind}"
     exporter(report, path)
     text = reader(path)
-    for expected in ["Savings plans", "4.25", "123.45", "evidence-001", "partial", "denied",
+    for expected in ["Savings plans", "4.25", "123.45", "evidence-001", "partial", "incomplete",
                      "2026-01-01", "synthetic-subscription", "not additive", "alternative"]:
         assert expected in text
     assert path.stat().st_size > 1000
@@ -242,7 +263,7 @@ def test_csv_schema_is_explicit_and_contains_all_records_with_provenance(tmp_pat
     assert rows[0]["hourlyCommitment"] == "4.25"
     assert rows[0]["savingsAmount"] == "123.45"
     assert rows[1]["modeledCost"] == ""
-    assert all("denied" in row["sourceCoverage"] for row in rows)
+    assert all("incomplete" in row["sourceCoverage"] for row in rows)
     assert all(row["collectedAt"] == report.collected_at for row in rows)
 
 
@@ -278,8 +299,9 @@ def test_empty_denied_result_still_exports_coverage_not_success(tmp_path, connec
     exporter(report, path)
     text = reader(path)
     assert "No recommendation records" in text
-    assert "denied" in text
-    assert "Request Reader access" in text
+    assert "incomplete" in text
+    assert "access denied" not in text
+    assert "Request Reader access" not in text
     assert "4.25" not in text
 
 

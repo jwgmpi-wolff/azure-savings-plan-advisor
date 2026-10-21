@@ -1,3 +1,4 @@
 358effcd070ebe8ed5f43f35549e1f9b807516a3806f04002fda7039eead919e  AzureSavingsPlanAdvisor-0.6.0-Setup-x64.exe
 2dfbe265d83cab4a5a9981e531ac4bcc7b538f6d4a8e34e6a8250f26a021dc96  AzureSavingsPlanAdvisor-0.7.0-Setup-x64.exe
 d1672a9f76659aea2a607c3b1d7ad3b9935fbe0e096a7c4bb24b8ad70cfd755c  AzureSavingsPlanAdvisor-0.7.1-Setup-x64.exe
+07285a44ba2bdc93206c9b6c03a7fd8dc3557f80d7c6243396d0b500d9aba1c6  AzureSavingsPlanAdvisor-0.7.2-Setup-x64.exe

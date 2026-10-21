@@ -167,7 +167,7 @@ def test_multiple_subscriptions_keep_results_and_coverage_separate(client, monke
             text = path.read_text(encoding="utf-8-sig")
         assert SUB in text and OTHER in text
         assert "Synthetic Finance" in text and "Synthetic Engineering" in text
-        assert "denied" in text
+        assert "incomplete" in text
 
 
 @pytest.mark.parametrize("selected", [[], [SUB, OTHER]])

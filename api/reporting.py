@@ -136,13 +136,20 @@ def collection_warnings(result: dict[str, Any]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(warnings))
 
 
+def collection_summary(result: dict[str, Any]) -> str | None:
+    if collection_warnings(result) or result.get("completeness") == "partial" or result.get("collectionSummary"):
+        return "Data collection is incomplete. Some data could not be collected."
+    return None
+
+
 def export_result(result: dict[str, Any]) -> dict[str, Any]:
     exported = redacted_result(result)
     if exported.get("mode") == "connected":
-        warnings = collection_warnings(exported)
+        summary = collection_summary(exported)
         exported.pop("coverage", None)
-        if warnings:
-            exported["collectionWarnings"] = list(warnings)
+        exported.pop("collectionWarnings", None)
+        if summary:
+            exported["collectionSummary"] = summary
     return exported
 
 
@@ -160,7 +167,9 @@ def build_report(result: dict[str, Any]) -> SavingsReport:
             context.append(f"{key}: {clean_text(', '.join(value) if isinstance(value, list) else value)}")
         for key, value in sorted(result.get("filters", {}).items()):
             context.append(f"{key}: {clean_text(value)}")
-        coverage.extend(collection_warnings(result))
+        summary = collection_summary(result)
+        if summary:
+            coverage.append(summary)
         for recommendation in result["recommendations"]:
             details = recommendation.get("recommendationDetails", {})
             base = {

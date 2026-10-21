@@ -130,7 +130,7 @@ def test_row_details_click_keyboard_and_invalidation(tk_root, mode):
         assert "Synthetic_Plan_SKU" in text and "synthetic-evidence" in text
         assert "Benefit cost (report period): 17.00" in text
         assert "Assumed discount (%): Not supplied" in text
-        assert "denied" in text
+        assert "incomplete" in text and "access denied" not in text
         assert "Standard_D2s_v5" in text and "not attributed benefit coverage" in text
     elif mode == "modeler":
         assert "Assumed discount (%): 20.00" in text
@@ -166,7 +166,7 @@ def test_row_details_click_keyboard_and_invalidation(tk_root, mode):
     assert view.details_window is None
 
 @pytest.mark.parametrize("partial", [False, True])
-def test_desktop_suppresses_collection_noise_in_dashboard_details_and_json(tk_root, tmp_path, partial):
+def test_desktop_moves_collection_warnings_to_log_away_from_results_and_json(tk_root, tmp_path, partial):
     from tkinter.scrolledtext import ScrolledText
     from api.reporting import export_result
 
@@ -188,6 +188,11 @@ def test_desktop_suppresses_collection_noise_in_dashboard_details_and_json(tk_ro
             "recommendationDetails": {"commitmentAmount": 4.25},
         }], "advisorRecommendations": [],
     }
+    if partial:
+        for index in range(70):
+            result["coverage"][f"synthetic-subscription-{index}/savingsPlan"] = {
+                "status": "denied", "subscriptionName": f"Synthetic failed subscription {index}",
+            }
     window = AdvisorWindow(tk_root)
     window.show_result(result)
     output = window.output.get("1.0", "end")
@@ -202,17 +207,46 @@ def test_desktop_suppresses_collection_noise_in_dashboard_details_and_json(tk_ro
         for unwanted in ("technical-source-marker", "verbose-diagnostic-marker", "2025-01-01",
                          "2024-07-01", "synthetic-subscription/advisor"):
             assert unwanted not in text
+        assert "access denied" not in text
+        assert "Synthetic failed subscription" not in text
+        assert "Synthetic Finance" not in text
     assert bool(coverage) == partial
     assert bool(window.dashboard.coverage.winfo_manager()) == partial
     assert ("COLLECTION NOTES" in details) == partial
     assert "synthetic-evidence" in details and "4.25" in details
     if partial:
-        assert "access denied" in output and "Synthetic Finance" in coverage
+        assert "incomplete" in output and "See the Log tab" in coverage
+    assert window.tabs.tab(window.log_tab, "text") == "Log"
+    assert str(window.log_output["state"]) == "disabled"
+    log = window.log_output.get("1.0", "end")
+    if partial:
+        assert log.count("access denied") == 71
+        assert "Synthetic Finance" in log
+        assert "Synthetic failed subscription 69" in log
+        assert "Request Reader access" in log
+    else:
+        assert "No collection warnings" in log
+    assert str(window.tabs.select()) == str(window.dashboard)
+    window.tabs.select(window.log_tab)
+    assert str(window.tabs.select()) == str(window.log_tab)
     destination = tmp_path / "quiet.json"
     with patch("desktop_app.filedialog.asksaveasfilename", return_value=str(destination)):
         window.save()
     assert json.loads(destination.read_text(encoding="utf-8")) == export_result(result)
     assert window.result == result
+    assert "access denied" not in destination.read_text(encoding="utf-8")
+    window.values["azureTerm"].set("P3Y")
+    assert window.result is None
+    assert "Run a report for the current context" in window.log_output.get("1.0", "end")
+    assert "Synthetic Finance" not in window.log_output.get("1.0", "end")
+    result["coverage"] = {"advisor": {"status": "ok"}}
+    result["completeness"] = "complete"
+    window.show_result(result)
+    assert "No collection warnings" in window.log_output.get("1.0", "end")
+    assert "Synthetic failed subscription" not in window.log_output.get("1.0", "end")
+    window.set_log("Bearer synthetic-hidden-log-token")
+    assert "synthetic-hidden-log-token" not in window.log_output.get("1.0", "end")
+    assert "[REDACTED]" in window.log_output.get("1.0", "end")
 
 
 @pytest.mark.parametrize("invalid", [float("nan"), float("inf"), -101])
@@ -254,6 +288,7 @@ def test_desktop_window_analysis_and_export(tmp_path, tk_root):
         assert str(window.tabs.select()) == str(window.dashboard)
         assert all(str(button["state"]) == "normal" for button in window.export_buttons)
         assert "Net savings:" in window.output.get("1.0", "end")
+        assert "Offline model; no Azure collection was performed." in window.log_output.get("1.0", "end")
         destination = tmp_path / "result.json"
         with patch("desktop_app.filedialog.asksaveasfilename", return_value=str(destination)):
             window.save()

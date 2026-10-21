@@ -18,7 +18,8 @@ from api.models import ForecastRequest, validate_request
 from api.azure_provider import ConnectedProviderError
 from api.desktop_azure import DesktopAzure
 from api.reporting import (
-    NAVY, PALE, SavingsReport, build_report, collection_warnings, export_result, redacted_result, write_report,
+    NAVY, PALE, SavingsReport, build_report, clean_text, collection_summary, collection_warnings,
+    export_result, redacted_result, write_report,
 )
 from report_view import ReportView, apply_theme
 
@@ -69,9 +70,9 @@ def format_result(result: dict[str, Any]) -> str:
             result["notice"],
             "",
         ]
-        warnings = collection_warnings(result)
-        if warnings:
-            lines.extend(["COLLECTION WARNINGS", *warnings])
+        summary = collection_summary(result)
+        if summary:
+            lines.extend([summary, "See the Log tab for collection details."])
         lines.extend(["", "SAVINGS PLAN HOURLY COMMITMENTS (Azure Cost Management)"])
         if not result["recommendations"]:
             lines.append("No hourly commitment is available. Review source coverage above; no estimate was substituted.")
@@ -332,6 +333,17 @@ class AdvisorWindow:
         self.output.pack(fill="both", expand=True)
         self.tabs.add(self.dashboard, text="Executive dashboard")
         self.tabs.add(detail_frame, text="Evidence & details")
+        self.log_tab = ttk.Frame(self.tabs)
+        ttk.Label(self.log_tab, text="Collection log - details are not included in report exports.").pack(
+            anchor="w", padx=8, pady=8,
+        )
+        self.log_output = ScrolledText(
+            self.log_tab, wrap="word", font=("Segoe UI", 10), state="disabled",
+            background="white", foreground=NAVY, relief="flat", height=26,
+        )
+        self.log_output.pack(fill="both", expand=True)
+        self.tabs.add(self.log_tab, text="Log")
+        self.set_log("No collection log. Run a report for the current context.")
         self.tabs.select(detail_frame)
         self.set_output(
             "Azure-connected analysis is the default. No hourly-cost CSV is required.\n\n"
@@ -356,6 +368,7 @@ class AdvisorWindow:
             for button in self.export_buttons:
                 button.configure(state="disabled")
             self.dashboard.clear()
+            self.set_log("Report cleared. Run a report for the current context.")
             self.set_output("Inputs changed. Run analysis again for the selected context.")
 
     def invalidate_context(self, *_args: Any) -> None:
@@ -431,6 +444,7 @@ class AdvisorWindow:
         self.control_states = [str(control.cget("state")) for control in self.context_controls]
         for control in self.context_controls:
             control.configure(state="disabled")
+        self.set_log(message)
         self.set_output(message)
 
         def worker() -> None:
@@ -455,6 +469,7 @@ class AdvisorWindow:
             for control, state in zip(self.context_controls, self.control_states):
                 control.configure(state=state)
             if error:
+                self.set_log(error)
                 self.set_output(error)
                 messagebox.showerror("Azure operation failed", error, parent=self.root)
             else:
@@ -494,6 +509,17 @@ class AdvisorWindow:
     def show_result(self, result: dict[str, Any]) -> None:
         result = redacted_result(result)
         report = build_report(result)
+        warnings = collection_warnings(result) if result["mode"] == "connected" else ()
+        if result["mode"] != "connected":
+            log_notice = "Offline model; no Azure collection was performed."
+        elif collection_summary(result):
+            log_notice = "Detailed collection entries are unavailable for this incomplete report."
+        else:
+            log_notice = "No collection warnings for this report."
+        self.set_log("\n".join([
+            f"Collected: {report.collected_at}", f"Scope: {report.scope}", "",
+            *(warnings or (log_notice,)),
+        ]))
         self.set_output(format_result(result))
         self.dashboard.show(report)
         self.result = result
@@ -517,6 +543,12 @@ class AdvisorWindow:
         self.output.configure(state="disabled")
         if self.result is None:
             self.tabs.select(1)
+
+    def set_log(self, text: str) -> None:
+        self.log_output.configure(state="normal")
+        self.log_output.delete("1.0", "end")
+        self.log_output.insert("1.0", clean_text(text))
+        self.log_output.configure(state="disabled")
 
     def browse(self) -> None:
         path = filedialog.askopenfilename(parent=self.root, title="Select hourly costs CSV", filetypes=[("CSV files", "*.csv")])
