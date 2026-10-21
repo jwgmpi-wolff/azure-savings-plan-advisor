@@ -1,6 +1,6 @@
 # Azure Savings Plan Advisor
 
-**Windows app:** [Download the Windows x64 app installer](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/download/v0.4.0/AzureSavingsPlanAdvisor-0.4.0-Setup-x64.exe).
+**Windows app:** [Download the Windows x64 app installer](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/download/v0.4.1/AzureSavingsPlanAdvisor-0.4.1-Setup-x64.exe).
 For API development, see [prerequisite installers](#windows-installers)
 and [local development](#local-development).
 
@@ -16,7 +16,7 @@ User -> Copilot Studio -> Entra-authenticated REST API -> Azure Function
 ## Install the Windows app
 
 1. Open [the latest release](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/latest)
-   and download **AzureSavingsPlanAdvisor-0.4.0-Setup-x64.exe** from Assets.
+   and download **AzureSavingsPlanAdvisor-0.4.1-Setup-x64.exe** from Assets.
    Sign into GitHub with repository access; this repository is private.
 2. Run the installer on Windows 10/11 x64. It installs for your current user,
    creates a Start menu shortcut, and optionally creates a desktop shortcut.
@@ -128,7 +128,7 @@ From the project directory:
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-windows.txt
 if ($LASTEXITCODE -ne 0) { throw 'Windows build dependency installation failed.' }
-.\scripts\Build-WindowsInstaller.ps1 -Python .\.venv\Scripts\python.exe -Version 0.4.0
+.\scripts\Build-WindowsInstaller.ps1 -Python .\.venv\Scripts\python.exe -Version 0.4.1
 .\scripts\Test-WindowsInstaller.ps1
 ```
 
