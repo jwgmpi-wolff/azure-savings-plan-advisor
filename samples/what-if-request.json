@@ -1,0 +1,9 @@
+{
+  "mode": "what-if",
+  "term": "P1Y",
+  "currencyCode": "USD",
+  "scenario": "balanced",
+  "expectedChangePercent": 5,
+  "discountPercent": 18,
+  "baselineHourlyCosts": [12.4, 11.8, 13.1, 14.0, 9.7, 10.5, 12.9, 15.2]
+}

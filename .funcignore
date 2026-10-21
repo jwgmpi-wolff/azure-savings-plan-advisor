@@ -1,0 +1,17 @@
+.venv/
+.python_packages/
+__pycache__/
+.pytest_cache/
+local.settings.json
+tests/
+docs/
+agent/
+infra/
+samples/
+.git/
+.github/
+README.md
+SECURITY.md
+CUSTOMER_SHARING.md
+local.settings.example.json
+requirements-dev.txt

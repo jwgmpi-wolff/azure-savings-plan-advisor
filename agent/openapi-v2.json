@@ -1,0 +1,254 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Azure Savings Plan Advisor",
+    "description": "Decision-support API. What-if and comparison responses are estimates, not purchase recommendations.",
+    "version": "2.0.0"
+  },
+  "host": "REPLACE_WITH_FUNCTION_HOST.azurewebsites.net",
+  "basePath": "/api",
+  "schemes": ["https"],
+  "consumes": ["application/json"],
+  "produces": ["application/json"],
+  "securityDefinitions": {
+    "entraOAuth": {
+      "type": "oauth2",
+      "flow": "accessCode",
+      "authorizationUrl": "https://login.microsoftonline.com/REPLACE_WITH_TENANT_ID/oauth2/v2.0/authorize",
+      "tokenUrl": "https://login.microsoftonline.com/REPLACE_WITH_TENANT_ID/oauth2/v2.0/token",
+      "scopes": {
+        "api://REPLACE_WITH_API_CLIENT_ID/user_impersonation": "Call Azure Savings Plan Advisor"
+      }
+    }
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "GetHealth",
+        "summary": "Check API health",
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {"type": "string", "enum": ["ok"]},
+                "service": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analyze-savings-plan": {
+      "post": {
+        "operationId": "AnalyzeSavingsPlan",
+        "summary": "Analyze a connected recommendation or planning scenario",
+        "description": "All financial calculations are performed by the API. Never invent missing assumptions.",
+        "security": [
+          {
+            "entraOAuth": [
+              "api://REPLACE_WITH_API_CLIENT_ID/user_impersonation"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {"$ref": "#/definitions/AnalyzeRequest"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Normalized Azure recommendation or planning result",
+            "schema": {"$ref": "#/definitions/AnalyzeResponse"}
+          },
+          "400": {"description": "Invalid request or assumption"},
+          "401": {"description": "Entra authentication required"},
+          "502": {"description": "Azure Cost Management request failed"}
+        }
+      }
+    },
+    "/analyze-savings-plan-csv": {
+      "post": {
+        "operationId": "AnalyzeSavingsPlanCsv",
+        "summary": "Run a what-if estimate from hourly CSV data",
+        "consumes": ["multipart/form-data"],
+        "security": [
+          {
+            "entraOAuth": [
+              "api://REPLACE_WITH_API_CLIENT_ID/user_impersonation"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "csvFile",
+            "in": "formData",
+            "required": true,
+            "type": "file",
+            "description": "CSV with timezone-aware timestamp and eligible_payg_cost columns; at most 2 MB."
+          },
+          {
+            "name": "term",
+            "in": "formData",
+            "required": true,
+            "type": "string",
+            "enum": ["P1Y", "P3Y"]
+          },
+          {
+            "name": "currencyCode",
+            "in": "formData",
+            "required": true,
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          {
+            "name": "discountPercent",
+            "in": "formData",
+            "required": true,
+            "type": "number",
+            "format": "double",
+            "minimum": 0,
+            "exclusiveMaximum": 100
+          },
+          {
+            "name": "scenario",
+            "in": "formData",
+            "required": true,
+            "type": "string",
+            "enum": ["conservative", "balanced", "maximumSavings", "custom"]
+          },
+          {
+            "name": "hourlyCommitment",
+            "in": "formData",
+            "required": false,
+            "type": "number",
+            "format": "double"
+          },
+          {
+            "name": "expectedChangePercent",
+            "in": "formData",
+            "required": true,
+            "type": "number",
+            "format": "double"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What-if planning estimate",
+            "schema": {"$ref": "#/definitions/AnalyzeResponse"}
+          },
+          "400": {"description": "Invalid request or CSV data"},
+          "401": {"description": "Entra authentication required"}
+        }
+      }
+    }
+  },
+  "definitions": {
+    "AnalyzeRequest": {
+      "type": "object",
+      "required": ["mode"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["what-if", "comparison", "connected"]
+        },
+        "scope": {
+          "type": "string",
+          "description": "Explicit Azure subscription, billing, or management-group resource ID."
+        },
+        "term": {
+          "type": "string",
+          "enum": ["P1Y", "P3Y"],
+          "description": "Required for what-if and connected requests."
+        },
+        "lookbackPeriod": {
+          "type": "string",
+          "enum": ["Last7Days", "Last30Days", "Last60Days"]
+        },
+        "recommendationScope": {
+          "type": "string",
+          "enum": ["Single", "Shared"]
+        },
+        "currencyCode": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$",
+          "description": "ISO 4217 currency code explicitly supplied by the user."
+        },
+        "baselineHourlyCosts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 26304,
+          "items": {"type": "number", "minimum": 0},
+          "description": "Consecutive hourly eligible PAYG observations."
+        },
+        "csvData": {
+          "type": "string",
+          "maxLength": 2000000,
+          "description": "CSV text with timestamp and eligible_payg_cost columns."
+        },
+        "expectedChangePercent": {
+          "type": "number",
+          "minimum": -100,
+          "maximum": 10000,
+          "description": "Required for what-if and comparison requests."
+        },
+        "hourlyCommitment": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Explicit hourly plan payment for a custom scenario."
+        },
+        "discountPercent": {
+          "type": "number",
+          "minimum": 0,
+          "exclusiveMaximum": 100,
+          "description": "Required user-approved what-if assumption; never an Azure quote."
+        },
+        "discountPercentP1Y": {
+          "type": "number",
+          "minimum": 0,
+          "exclusiveMaximum": 100
+        },
+        "discountPercentP3Y": {
+          "type": "number",
+          "minimum": 0,
+          "exclusiveMaximum": 100
+        },
+        "scenario": {
+          "type": "string",
+          "enum": ["conservative", "balanced", "maximumSavings", "custom"],
+          "description": "Required for what-if requests. Custom requires hourlyCommitment."
+        }
+      },
+      "additionalProperties": false
+    },
+    "AnalyzeResponse": {
+      "type": "object",
+      "description": "Financial values are API-calculated or returned by Azure Cost Management.",
+      "properties": {
+        "mode": {"type": "string"},
+        "currencyCode": {"type": "string"},
+        "options": {"type": "array", "items": {"type": "object"}},
+        "result": {"type": "object"},
+        "baselineEligibleCostObserved": {"type": "number"},
+        "scenarioEligibleCostObserved": {"type": "number"},
+        "commitmentCostObserved": {"type": "number"},
+        "modeledCostObserved": {"type": "number"},
+        "netSavingsObserved": {"type": "number"},
+        "coveragePercent": {"type": "number"},
+        "utilizationPercent": {"type": "number"},
+        "remainingPaygCostObserved": {"type": "number"},
+        "overageCostObserved": {"type": "number"},
+        "unusedCommitmentCostObserved": {"type": "number"},
+        "confidence": {"type": "string"},
+        "risk": {"type": "string", "enum": ["Lower", "Moderate", "Higher"]},
+        "volatilityPercent": {"type": "number"},
+        "warnings": {"type": "array", "items": {"type": "string"}},
+        "assumptions": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

@@ -1,0 +1,56 @@
+# Security and privacy
+
+## Identity and authorization
+
+- Production API requests are protected by App Service Authentication using
+  Microsoft Entra ID. `infra/main.bicep` configures an explicit API audience;
+  `/api/health` is the only excluded route and returns no customer data.
+- Connected recommendations use an on-behalf-of token exchange. Azure
+  Cost Management therefore evaluates the signed-in user's delegated access,
+  not a broad Function App managed identity.
+- The Function App's user-assigned managed identity is used for Function
+  storage, deployment storage, Application Insights, and Key Vault secret
+  resolution only.
+- The template does not grant Cost Management roles. Grant users only the
+  minimum read access needed at the customer-approved scope.
+- Local connected development uses `DefaultAzureCredential` only when
+  `AZURE_AUTH_MODE=developer` is explicitly selected in local settings.
+
+## Data handling
+
+- Never commit client secrets, Function keys, access tokens, customer billing
+  identifiers, or exported customer usage data.
+- Store the API app registration secret in Azure Key Vault and deploy its
+  versionless secret URI as an App Service Key Vault reference.
+- Request bodies, authorization headers, CSV rows, and Cost Management
+  payloads are not written to logs. Events contain only an operation marker and
+  an exception class when needed for troubleshooting.
+- Connected responses contain only a documented allowlist of recommendation
+  fields. Customer-specific Azure resource identifiers are not returned;
+  recommendation references are one-way shortened hashes.
+- The health endpoint reports only service status.
+- What-if requests are validated before calculation. CSV is size limited and
+  rejects invalid, nonnumeric, negative, unordered, duplicate, or
+  non-consecutive hourly data rather than repairing it.
+
+## Operational controls
+
+- The Bicep template uses HTTPS-only access, TLS 1.2 minimum, disabled FTP,
+  restricted CORS origins, non-public storage containers, storage data-plane
+  identities, and Key Vault Secrets User at the specific OBO client-secret
+  scope.
+- Do not use wildcard CORS or Function keys as a production authentication
+  substitute.
+- Monitor Function failures and Azure dependency failures through
+  workspace-based Application Insights. Keep telemetry free of raw requests
+  and financial records.
+- Review Key Vault reference resolution and managed-identity role propagation
+  before enabling customer traffic.
+- Validate deployment tenant, subscription, region, resource group, and
+  principal before infrastructure changes. Review and approve role assignments.
+- The API is decision support only and never performs Savings Plan purchases,
+  modifications, exchanges, cancellations, or renewals.
+
+Report security concerns privately to the repository owner or through the
+repository's private vulnerability reporting process. Do not disclose
+vulnerabilities in public issues.

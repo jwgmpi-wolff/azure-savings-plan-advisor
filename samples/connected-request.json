@@ -1,0 +1,7 @@
+{
+  "mode": "connected",
+  "scope": "/subscriptions/00000000-0000-0000-0000-000000000000",
+  "term": "P1Y",
+  "lookbackPeriod": "Last30Days",
+  "recommendationScope": "Shared"
+}

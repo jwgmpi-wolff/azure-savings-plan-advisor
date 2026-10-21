@@ -1,0 +1,9 @@
+.venv/
+.python_packages/
+__pycache__/
+.pytest_cache/
+local.settings.json
+*.pyc
+.DS_Store
+azurite-data/
+azurite-debug.log
