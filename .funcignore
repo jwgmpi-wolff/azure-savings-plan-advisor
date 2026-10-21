@@ -16,6 +16,8 @@ CUSTOMER_SHARING.md
 local.settings.example.json
 requirements-dev.txt
 requirements-windows.txt
+requirements-reports.txt
+report_view.py
 desktop_app.py
 installer/
 scripts/

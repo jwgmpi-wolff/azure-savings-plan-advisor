@@ -1,2 +1,4 @@
 -r requirements.txt
+-r requirements-reports.txt
 pytest==8.3.4
+pypdf==6.1.1

@@ -1,6 +1,6 @@
 # Azure Savings Plan Advisor
 
-**Windows app:** [Download the Windows x64 app installer](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/download/v0.3.0/AzureSavingsPlanAdvisor-0.3.0-Setup-x64.exe).
+**Windows app:** [Download the Windows x64 app installer](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/download/v0.4.0/AzureSavingsPlanAdvisor-0.4.0-Setup-x64.exe).
 For API development, see [prerequisite installers](#windows-installers)
 and [local development](#local-development).
 
@@ -16,7 +16,7 @@ User -> Copilot Studio -> Entra-authenticated REST API -> Azure Function
 ## Install the Windows app
 
 1. Open [the latest release](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/latest)
-   and download **AzureSavingsPlanAdvisor-0.3.0-Setup-x64.exe** from Assets.
+   and download **AzureSavingsPlanAdvisor-0.4.0-Setup-x64.exe** from Assets.
    Sign into GitHub with repository access; this repository is private.
 2. Run the installer on Windows 10/11 x64. It installs for your current user,
    creates a Start menu shortcut, and optionally creates a desktop shortcut.
@@ -29,8 +29,43 @@ User -> Copilot Studio -> Entra-authenticated REST API -> Azure Function
    GUID to switch directories, including guest directories.
 4. Select an accessible subscription explicitly, choose P1Y/P3Y and the lookback,
    then select **Analyze**. **No CSV or assumed discount is required.**
-5. Review Azure Advisor Cost actions and Azure Cost Management Savings Plan
-   hourly commitment recommendations. Optionally save the result as JSON.
+5. Review the **Executive dashboard** for summary cards, savings-percentage
+   bars and the recommendation table; **Evidence & details** includes the
+   assumptions, warnings and underlying Azure values.
+6. Use **Executive PDF**, **Executive PowerPoint**, **Export CSV** or **JSON**
+   to save your current results.
+
+### Executive dashboard and exports
+
+The desktop uses a light blue background, white report panels and teal controls.
+The screen, PDF, PowerPoint (`.pptx`) and CSV use the same normalized report:
+
+- Summary cards show recommendation/option count, Advisor action count,
+  collection coverage and currencies. Values are never summed across currencies
+  or mutually exclusive alternatives.
+- Savings-percentage charts show up to five primary recommendations or modeled
+  options. The count of displayed/available percentages is explicit; all records,
+  including Azure's alternatives and Advisor actions, remain in the table/exports.
+- PDF and PowerPoint include the executive summary, chart when percentages are
+  available, scope, collection time, source coverage/API versions, evidence
+  references, details and limitations. Long reports paginate instead of dropping
+  records. CSV includes the same metadata on each data row and separate rows for
+  recommendations, alternatives, Advisor actions or modeled options.
+- Empty and partial reports can be exported with their coverage limitations.
+  Missing financial values stay **Not supplied** (blank numeric CSV cells);
+  they are never replaced with zero.
+- The app does not collect service/resource-group cost breakdowns. It therefore
+  does not fabricate the cost-by-service/resource-group charts shown in other
+  report products. Its charts represent the Savings Plan data actually returned.
+- Changing tenant, subscription, mode or assumptions clears the dashboard and
+  disables every export until a new report is run. Exports use the already
+  collected report; they do not silently query Azure again.
+- Known credential patterns are redacted consistently from screen data and
+  exports, and CSV text cells are protected against spreadsheet formula execution.
+  Tenant/subscription provenance and legitimate workload descriptions remain;
+  review these customer-sensitive fields before sharing externally.
+- Export writes are atomic: a failed export does not replace a previous report.
+  Exports are generated locally; PowerPoint and a PDF printer are not required.
 
 ### Azure context, permissions, and recommendation sources
 
@@ -93,7 +128,7 @@ From the project directory:
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-windows.txt
 if ($LASTEXITCODE -ne 0) { throw 'Windows build dependency installation failed.' }
-.\scripts\Build-WindowsInstaller.ps1 -Python .\.venv\Scripts\python.exe -Version 0.3.0
+.\scripts\Build-WindowsInstaller.ps1 -Python .\.venv\Scripts\python.exe -Version 0.4.0
 .\scripts\Test-WindowsInstaller.ps1
 ```
 

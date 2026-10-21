@@ -16,6 +16,10 @@ from api.csv_parser import MAX_CSV_BYTES, parse_hourly_cost_csv
 from api.models import ForecastRequest, validate_request
 from api.azure_provider import ConnectedProviderError
 from api.desktop_azure import DesktopAzure
+from api.reporting import (
+    NAVY, PALE, SavingsReport, build_report, redacted_result, write_report,
+)
+from report_view import ReportView, apply_theme
 
 
 APP_TITLE = "Azure Savings Plan Advisor"
@@ -116,23 +120,33 @@ class AdvisorWindow:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.result: dict[str, Any] | None = None
+        self.report: SavingsReport | None = None
         self.azure = DesktopAzure()
         self.busy = False
         self.events: queue.Queue[tuple[Callable[[Any], None], Any, str | None]] = queue.Queue()
         self.subscription_ids: dict[str, str] = {}
         root.title(APP_TITLE)
-        root.geometry("1000x780")
-        root.minsize(760, 600)
-        frame = ttk.Frame(root, padding=16)
-        frame.pack(fill="both", expand=True)
+        root.geometry("1280x960")
+        root.minsize(850, 650)
+        apply_theme(root)
+        viewport = tk.Canvas(root, background=PALE, highlightthickness=0)
+        page_scroll = ttk.Scrollbar(root, orient="vertical", command=viewport.yview)
+        viewport.configure(yscrollcommand=page_scroll.set)
+        page_scroll.pack(side="right", fill="y")
+        viewport.pack(side="left", fill="both", expand=True)
+        frame = ttk.Frame(viewport, padding=16, style="App.TFrame")
+        page = viewport.create_window((0, 0), window=frame, anchor="nw")
+        frame.bind("<Configure>", lambda _event: viewport.configure(scrollregion=viewport.bbox("all")))
+        viewport.bind("<Configure>", lambda event: viewport.itemconfigure(page, width=event.width))
+        viewport.bind("<MouseWheel>", lambda event: viewport.yview_scroll(-int(event.delta / 120), "units"))
         frame.columnconfigure(1, weight=1)
-        frame.rowconfigure(5, weight=1)
-        ttk.Label(frame, text=APP_TITLE, font=("Segoe UI", 18, "bold")).grid(
+        ttk.Label(frame, text=APP_TITLE, font=("Segoe UI", 22, "bold"), background=PALE).grid(
             row=0, column=0, columnspan=3, sticky="w", pady=(0, 8)
         )
         ttk.Label(
             frame,
             text="Read Azure recommendations for existing workloads. CSV is optional, for offline modeling only.",
+            background=PALE,
             wraplength=700,
         ).grid(row=1, column=0, columnspan=3, sticky="w")
         self.values: dict[str, tk.StringVar] = {}
@@ -144,7 +158,7 @@ class AdvisorWindow:
         mode.grid(row=2, column=0, columnspan=3, sticky="ew", pady=8)
         mode.bind("<<ComboboxSelected>>", self.change_mode)
         self.context_controls: list[ttk.Widget] = [mode]
-        self.azure_frame = ttk.LabelFrame(frame, text="Azure Entra context (Azure CLI user sign-in)", padding=8)
+        self.azure_frame = ttk.LabelFrame(frame, text="Authentication, tenant & subscription", padding=12)
         self.azure_frame.grid(row=3, column=0, columnspan=3, sticky="ew")
         self.azure_frame.columnconfigure(1, weight=1)
         azure_fields = [
@@ -208,15 +222,32 @@ class AdvisorWindow:
             variable.trace_add("write", self.invalidate_result)
         ttk.Button(self.offline_frame, text="Browse...", command=self.browse).grid(row=0, column=2, padx=(8, 0))
         self.offline_frame.grid_remove()
-        actions = ttk.Frame(frame)
-        actions.grid(row=4, column=0, columnspan=3, sticky="w", pady=10)
-        analyze_button = ttk.Button(actions, text="Analyze", command=self.analyze)
+        actions = ttk.LabelFrame(frame, text="Report scope & executive exports", padding=10)
+        actions.grid(row=4, column=0, columnspan=3, sticky="ew", pady=10)
+        analyze_button = ttk.Button(actions, text="Run report", command=self.analyze)
         analyze_button.pack(side="left")
         self.context_controls.append(analyze_button)
-        self.save_button = ttk.Button(actions, text="Save result as JSON...", command=self.save, state="disabled")
+        self.export_buttons: list[ttk.Button] = []
+        for label, kind in (("Executive PDF", "pdf"), ("Executive PowerPoint", "pptx"), ("Export CSV", "csv")):
+            button = ttk.Button(actions, text=label, command=lambda kind=kind: self.export_report(kind), state="disabled")
+            button.pack(side="left", padx=4)
+            self.export_buttons.append(button)
+        self.save_button = ttk.Button(actions, text="JSON", command=self.save, state="disabled")
         self.save_button.pack(side="left", padx=8)
-        self.output = ScrolledText(frame, wrap="word", font=("Consolas", 10), state="disabled")
-        self.output.grid(row=5, column=0, columnspan=3, sticky="nsew")
+        results = ttk.LabelFrame(frame, text="Results", padding=8)
+        results.grid(row=5, column=0, columnspan=3, sticky="nsew")
+        self.tabs = ttk.Notebook(results)
+        self.tabs.pack(fill="both", expand=True)
+        self.dashboard = ReportView(self.tabs)
+        detail_frame = ttk.Frame(self.tabs)
+        self.output = ScrolledText(
+            detail_frame, wrap="word", font=("Segoe UI", 10), state="disabled",
+            background="white", foreground=NAVY, relief="flat", height=26,
+        )
+        self.output.pack(fill="both", expand=True)
+        self.tabs.add(self.dashboard, text="Executive dashboard")
+        self.tabs.add(detail_frame, text="Evidence & details")
+        self.tabs.select(detail_frame)
         self.set_output(
             "Azure-connected analysis is the default. No hourly-cost CSV is required.\n\n"
             "Select Sign in / switch tenant to open Entra sign-in.\n"
@@ -233,8 +264,12 @@ class AdvisorWindow:
 
     def invalidate_result(self, *_args: Any) -> None:
         self.result = None
+        self.report = None
         if hasattr(self, "save_button"):
             self.save_button.configure(state="disabled")
+            for button in self.export_buttons:
+                button.configure(state="disabled")
+            self.dashboard.clear()
             self.set_output("Inputs changed. Run analysis again for the selected context.")
 
     def invalidate_context(self, *_args: Any) -> None:
@@ -326,14 +361,20 @@ class AdvisorWindow:
         )
 
     def show_result(self, result: dict[str, Any]) -> None:
-        self.result = result
+        result = redacted_result(result)
+        report = build_report(result)
         self.set_output(format_result(result))
+        self.dashboard.show(report)
+        self.result = result
+        self.report = report
         self.save_button.configure(state="normal")
+        for button in self.export_buttons:
+            button.configure(state="normal")
+        self.tabs.select(self.dashboard)
 
     def callback_error(self, exception_type: type[BaseException], exception: BaseException, traceback: Any) -> None:
         logging.error("Desktop callback failed", extra={"error_type": exception_type.__name__})
-        self.result = None
-        self.save_button.configure(state="disabled")
+        self.invalidate_result()
         self.set_output("An unexpected application error occurred. No result is available.")
         messagebox.showerror(APP_TITLE, "An unexpected application error occurred. Restart the app and retry.", parent=self.root)
 
@@ -342,6 +383,8 @@ class AdvisorWindow:
         self.output.delete("1.0", "end")
         self.output.insert("1.0", text)
         self.output.configure(state="disabled")
+        if self.result is None:
+            self.tabs.select(1)
 
     def browse(self) -> None:
         path = filedialog.askopenfilename(parent=self.root, title="Select hourly costs CSV", filetypes=[("CSV files", "*.csv")])
@@ -365,8 +408,7 @@ class AdvisorWindow:
                 self.show_result, "Reading Azure Advisor and Savings Plan recommendations...",
             )
             return
-        self.result = None
-        self.save_button.configure(state="disabled")
+        self.invalidate_result()
         self.set_output("")
         try:
             mode = self.values["mode"].get()
@@ -394,14 +436,31 @@ class AdvisorWindow:
                 except ValueError as exc:
                     raise ValueError(f"Enter a numeric value for {field}.") from exc
             result = analyze_csv_file(Path(csv_file), request)
-            display = format_result(result)
         except (OSError, ValueError) as exc:
             self.set_output("Analysis failed. Check the selected file and assumptions.")
             messagebox.showerror("Analysis failed", str(exc), parent=self.root)
             return
-        self.result = result
-        self.set_output(display)
-        self.save_button.configure(state="normal")
+        self.show_result(result)
+
+    def export_report(self, kind: str) -> None:
+        if self.report is None or self.result is None or self.busy:
+            messagebox.showerror(APP_TITLE, "Run a report for the current context before exporting.", parent=self.root)
+            return
+        if kind not in ("pdf", "pptx", "csv"):
+            raise ValueError("Unsupported export format.")
+        path = filedialog.asksaveasfilename(
+            parent=self.root, title=f"Export executive report ({kind.upper()})",
+            defaultextension=f".{kind}", initialfile=f"SavingsPlanReport.{kind}",
+            filetypes=[(f"{kind.upper()} report", f"*.{kind}")],
+        )
+        if not path:
+            return
+        try:
+            write_report(self.report, Path(path), kind)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Export failed", str(exc), parent=self.root)
+        else:
+            messagebox.showinfo("Export complete", f"{kind.upper()} report saved successfully.", parent=self.root)
 
     def save(self) -> None:
         if self.result is None:

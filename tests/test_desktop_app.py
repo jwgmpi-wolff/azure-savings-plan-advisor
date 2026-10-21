@@ -14,6 +14,29 @@ from api.azure_provider import ConnectedProviderError
 SAMPLE = Path(__file__).parents[1] / "samples" / "hourly-costs.csv"
 
 
+@pytest.fixture(scope="module")
+def tk_interpreter():
+    if sys.platform != "win32":
+        pytest.skip("Windows desktop interaction test")
+    import tkinter as tk
+    root = tk.Tk()
+    root.withdraw()
+    yield root
+    root.destroy()
+
+
+@pytest.fixture
+def tk_root(tk_interpreter):
+    import tkinter as tk
+    window = tk.Toplevel(tk_interpreter)
+    window.withdraw()
+    yield window
+    for identifier in tk_interpreter.tk.call("after", "info"):
+        tk_interpreter.after_cancel(identifier)
+    if window.winfo_exists():
+        window.destroy()
+
+
 def assumptions(mode="what-if"):
     common = {"mode": mode, "currencyCode": "USD", "expectedChangePercent": 0}
     if mode == "comparison":
@@ -67,10 +90,10 @@ def test_desktop_handles_bom_and_invalid_encoding(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows desktop interaction test")
-def test_desktop_window_analysis_and_export(tmp_path):
+def test_desktop_window_analysis_and_export(tmp_path, tk_root):
     import tkinter as tk
 
-    root = tk.Tk()
+    root = tk_root
     root.withdraw()
     try:
         window = AdvisorWindow(root)
@@ -78,6 +101,10 @@ def test_desktop_window_analysis_and_export(tmp_path):
             window.values[key].set(value)
         window.analyze()
         assert window.result is not None
+        assert window.report is not None
+        assert len(window.dashboard.table.get_children()) == 1
+        assert str(window.tabs.select()) == str(window.dashboard)
+        assert all(str(button["state"]) == "normal" for button in window.export_buttons)
         assert "Net savings:" in window.output.get("1.0", "end")
         destination = tmp_path / "result.json"
         with patch("desktop_app.filedialog.asksaveasfilename", return_value=str(destination)):
@@ -89,13 +116,16 @@ def test_desktop_window_analysis_and_export(tmp_path):
         error.assert_called_once()
         assert window.result is None
         assert str(window.save_button["state"]) == "disabled"
+        assert all(str(button["state"]) == "disabled" for button in window.export_buttons)
+        assert window.report is None
+        assert not window.dashboard.table.get_children()
         assert "Analysis failed" in window.output.get("1.0", "end")
     finally:
         root.destroy()
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows desktop interaction test")
-def test_connected_window_defaults_to_azure_without_csv_and_clears_on_tenant_change():
+def test_connected_window_defaults_to_azure_without_csv_and_clears_on_tenant_change(tk_root):
     import tkinter as tk
 
     tenant = "00000000-0000-0000-0000-000000000001"
@@ -111,7 +141,7 @@ def test_connected_window_defaults_to_azure_without_csv_and_clears_on_tenant_cha
             "recommendationDetails": {"commitmentAmount": 4.25},
         }],
     }
-    root = tk.Tk()
+    root = tk_root
     root.withdraw()
     try:
         window = AdvisorWindow(root)
@@ -132,21 +162,70 @@ def test_connected_window_defaults_to_azure_without_csv_and_clears_on_tenant_cha
         analyze.assert_called_once_with(tenant, subscription, "P1Y", "Last30Days")
         assert "Hourly commitment: 4.25 USD" in window.output.get("1.0", "end")
         assert window.result == result
+        assert window.report.metrics[0][1] == "1"
         window.values["tenantId"].set(other)
         assert window.result is None
         assert window.subscription_ids == {}
         assert window.values["subscription"].get() == ""
         assert str(window.save_button["state"]) == "disabled"
         assert "4.25" not in window.output.get("1.0", "end")
+        assert window.report is None
+        assert not window.dashboard.table.get_children()
     finally:
         root.destroy()
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows desktop interaction test")
-def test_connected_error_reenables_controls_without_stale_export():
+@pytest.mark.parametrize("kind", ["pdf", "pptx", "csv"])
+def test_dashboard_export_actions_write_requested_format(tmp_path, kind, tk_root):
     import tkinter as tk
 
-    root = tk.Tk()
+    root = tk_root
+    root.withdraw()
+    try:
+        window = AdvisorWindow(root)
+        window.show_result(analyze_csv_file(SAMPLE, assumptions("comparison")))
+        path = tmp_path / f"report.{kind}"
+        with patch("desktop_app.filedialog.asksaveasfilename", return_value=str(path)), \
+             patch("desktop_app.messagebox.showinfo") as info:
+            window.export_report(kind)
+        info.assert_called_once()
+        assert path.stat().st_size > 100
+        window.values["tenantId"].set("context-changed")
+        with patch("desktop_app.filedialog.asksaveasfilename") as save, \
+             patch("desktop_app.messagebox.showerror") as error:
+            window.export_report(kind)
+        error.assert_called_once()
+        save.assert_not_called()
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows desktop interaction test")
+def test_export_write_error_is_visible_not_success(tmp_path, tk_root):
+    import tkinter as tk
+
+    root = tk_root
+    root.withdraw()
+    try:
+        window = AdvisorWindow(root)
+        window.show_result(analyze_csv_file(SAMPLE, assumptions()))
+        path = tmp_path / "nonexistent" / "report.csv"
+        with patch("desktop_app.filedialog.asksaveasfilename", return_value=str(path)), \
+             patch("desktop_app.messagebox.showinfo") as info, \
+             patch("desktop_app.messagebox.showerror") as error:
+            window.export_report("csv")
+        error.assert_called_once()
+        info.assert_not_called()
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows desktop interaction test")
+def test_connected_error_reenables_controls_without_stale_export(tk_root):
+    import tkinter as tk
+
+    root = tk_root
     root.withdraw()
     try:
         window = AdvisorWindow(root)

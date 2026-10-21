@@ -71,6 +71,15 @@
 - Connected exports intentionally include selected tenant/subscription context
   for provenance and allowlisted Advisor descriptions, which may contain workload
   details. Review/redact these before sharing. Raw Azure responses are not exported.
+- The dashboard, JSON and report exports apply a shared credential-pattern
+  redaction policy. PDF, PowerPoint and CSV share normalized recommendation
+  records, including source coverage, missing-value semantics and limitations.
+  This is not a guarantee of anonymization; customer workload descriptions and
+  selected scope identifiers are intentionally retained as evidence.
+- CSV text cells beginning with spreadsheet formula markers are escaped.
+  Every export is disabled when context/assumptions change. PDF/PPTX/CSV writes
+  use a temporary file and atomic replacement to preserve a previous report on
+  generation failure; no external export service is used.
 - The per-user installer bundles Python and dependencies and does not require
   administrator rights. Releases include a SHA-256 checksum.
 - Installers are currently unsigned. Code signing and organizational deployment
