@@ -263,6 +263,71 @@ def test_dashboard_export_actions_write_requested_format(tmp_path, kind, tk_root
         root.destroy()
 
 
+def test_compute_modeler_needs_no_csv_or_azure_and_copies_only_current_model(tk_root):
+    window = AdvisorWindow(tk_root)
+    window.values["mode"].set("modeler")
+    window.change_mode()
+    assert window.modeler_frame.winfo_manager() == "grid"
+    assert window.offline_frame.winfo_manager() == ""
+    assert window.azure_frame.winfo_manager() == ""
+    inputs = {
+        "modelPeriodHours": "100", "modelComputeHours": "90", "modelPaygRate": "10",
+        "modelDiscountPercent": "20", "modelCommitment": "8", "modelCurrency": "USD", "modelTerm": "P1Y",
+    }
+    for key, value in inputs.items():
+        window.values[key].set(value)
+    with patch.object(window.azure, "analyze_many") as azure, patch("desktop_app.analyze_csv_file") as csv:
+        window.analyze()
+        azure.assert_not_called()
+        csv.assert_not_called()
+    assert window.result["savingsAmount"] == 100
+    assert window.result["breakEvenHours"] == 80
+    assert str(window.copilot_button["state"]) == "normal"
+    assert len(window.dashboard.table.get_children()) == 6
+    assert "80.00" in window.dashboard.table.item("0", "values")
+    assert "calculation-based" in window.output.get("1.0", "end")
+    text = " ".join(
+        window.dashboard.chart.itemcget(item, "text")
+        for item in window.dashboard.chart.find_all() if window.dashboard.chart.type(item) == "text"
+    )
+    assert "Net savings / loss" in text and "-800.00 USD" in text
+    with patch.object(tk_root, "clipboard_clear") as clear, \
+         patch.object(tk_root, "clipboard_append") as append, \
+         patch("desktop_app.messagebox.showinfo") as info:
+        window.copy_for_copilot()
+        clear.assert_called_once()
+        assert '"breakEvenHours": 80.0' in append.call_args.args[0]
+        info.assert_called_once()
+    window.values["modelComputeHours"].set("10")
+    assert window.result is None
+    assert str(window.copilot_button["state"]) == "disabled"
+    with patch.object(tk_root, "clipboard_append") as append, patch("desktop_app.messagebox.showerror") as error:
+        window.copy_for_copilot()
+        append.assert_not_called()
+        error.assert_called_once()
+    window.analyze()
+    assert window.result["outcome"] == "Loss"
+    window.values["modelComputeHours"].set("101")
+    with patch("desktop_app.messagebox.showerror") as error:
+        window.analyze()
+        error.assert_called_once()
+    assert window.result is None
+    assert all(str(button["state"]) == "disabled" for button in window.export_buttons)
+    tk_root.destroy()
+
+
+def test_compute_modeler_rejects_missing_prices_instead_of_inventing_savings(tk_root):
+    window = AdvisorWindow(tk_root)
+    window.values["mode"].set("modeler")
+    window.change_mode()
+    window.values["modelComputeHours"].set("720")
+    with patch("desktop_app.messagebox.showerror") as error:
+        window.analyze()
+    assert "Enter a numeric value for period hours" in error.call_args.args[1]
+    assert window.result is None
+    tk_root.destroy()
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows desktop interaction test")
 def test_export_write_error_is_visible_not_success(tmp_path, tk_root):
     import tkinter as tk

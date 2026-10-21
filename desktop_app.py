@@ -12,6 +12,7 @@ from tkinter.scrolledtext import ScrolledText
 from typing import Any
 
 from api.calculator import calculate_comparison, calculate_forecast
+from api.compute_modeler import calculate_compute_model, copilot_prompt
 from api.csv_parser import MAX_CSV_BYTES, parse_hourly_cost_csv
 from api.models import ForecastRequest, validate_request
 from api.azure_provider import ConnectedProviderError
@@ -44,6 +45,20 @@ def analyze_csv_file(path: Path, assumptions: dict[str, Any]) -> dict[str, Any]:
 
 
 def format_result(result: dict[str, Any]) -> str:
+    if result["mode"] == "modeler":
+        return "\n".join([
+            "OFFLINE COMPUTE-HOURS PLANNING ESTIMATE - NOT AN AZURE PURCHASE RECOMMENDATION",
+            f"Calculated at: {result['collectedAt']}",
+            f"Period: {result['periodHours']:g} elapsed hours | Compute runtime: {result['computeHours']:g} hours",
+            f"Outcome: {result['outcome']}",
+            f"Projected full-term PAYG cost: {result['projectedTermBaselineCost']:,.2f} {result['currencyCode']}",
+            f"Projected full-term modeled cost: {result['projectedTermModeledCost']:,.2f} {result['currencyCode']}",
+            f"Projected full-term net savings: {result['projectedTermSavings']:,.2f} {result['currencyCode']}",
+            "Full-term projection repeats the supplied duty cycle and rates; it is not a forecast.",
+            "", "BREAK-EVEN GUIDANCE (calculation-based, not Copilot-generated)",
+            *result["guidance"], "", "ASSUMPTIONS",
+            *result["assumptions"],
+        ])
     if result["mode"] == "connected":
         lines = [
             "LIVE AZURE RECOMMENDATIONS - REVIEW IN AZURE BEFORE PURCHASE",
@@ -157,7 +172,7 @@ class AdvisorWindow:
         self.values["mode"] = tk.StringVar(value="connected")
         mode = ttk.Combobox(
             frame, textvariable=self.values["mode"], state="readonly",
-            values=("connected", "what-if", "comparison"),
+            values=("connected", "modeler", "what-if", "comparison"),
         )
         mode.grid(row=2, column=0, columnspan=3, sticky="ew", pady=8)
         mode.bind("<<ComboboxSelected>>", self.change_mode)
@@ -249,6 +264,36 @@ class AdvisorWindow:
             variable.trace_add("write", self.invalidate_result)
         ttk.Button(self.offline_frame, text="Browse...", command=self.browse).grid(row=0, column=2, padx=(8, 0))
         self.offline_frame.grid_remove()
+        self.modeler_frame = ttk.LabelFrame(frame, text="Compute-hours modeler (no CSV or sign-in required)", padding=12)
+        self.modeler_frame.grid(row=3, column=0, columnspan=3, sticky="ew")
+        self.modeler_frame.columnconfigure(1, weight=1)
+        modeler_fields = [
+            ("modelPeriodHours", "Elapsed period hours (e.g. 720 for 30 days)", None),
+            ("modelComputeHours", "Compute running hours within this period (one workload)", None),
+            ("modelPaygRate", "Eligible PAYG cost per running hour", None),
+            ("modelDiscountPercent", "Assumed Savings Plan discount (%)", None),
+            ("modelCommitment", "Hourly monetary commitment (paid even while idle)", None),
+            ("modelCurrency", "Currency code (e.g. USD)", None),
+            ("modelTerm", "Plan term (full obligation still applies)", ("P1Y", "P3Y")),
+        ]
+        for row, (key, label, choices) in enumerate(modeler_fields):
+            variable = tk.StringVar()
+            self.values[key] = variable
+            ttk.Label(self.modeler_frame, text=label).grid(row=row, column=0, sticky="w", padx=(0, 12), pady=3)
+            widget = (
+                ttk.Combobox(self.modeler_frame, textvariable=variable, values=choices, state="readonly")
+                if choices else ttk.Entry(self.modeler_frame, textvariable=variable)
+            )
+            widget.grid(row=row, column=1, sticky="ew", pady=3)
+            variable.trace_add("write", self.invalidate_result)
+        ttk.Label(
+            self.modeler_frame, wraplength=950,
+            text="Enter your own rate, discount and commitment; no prices are invented. "
+                 "Compute hours are runtime, not elapsed billing hours. One constant-rate workload only. "
+                 "Use a period that represents its duty cycle. Results include idle-hour cost and uncovered PAYG. "
+                 "Guidance is calculated locally; Copy for Copilot only copies a prompt and does not send data.",
+        ).grid(row=len(modeler_fields), column=0, columnspan=2, sticky="w", pady=8)
+        self.modeler_frame.grid_remove()
         actions = ttk.LabelFrame(frame, text="Report scope & executive exports", padding=10)
         actions.grid(row=4, column=0, columnspan=3, sticky="ew", pady=10)
         analyze_button = ttk.Button(actions, text="Run report", command=self.analyze)
@@ -261,6 +306,8 @@ class AdvisorWindow:
             self.export_buttons.append(button)
         self.save_button = ttk.Button(actions, text="JSON", command=self.save, state="disabled")
         self.save_button.pack(side="left", padx=8)
+        self.copilot_button = ttk.Button(actions, text="Copy for Copilot", command=self.copy_for_copilot, state="disabled")
+        self.copilot_button.pack(side="left", padx=4)
         results = ttk.LabelFrame(frame, text="Results", padding=8)
         results.grid(row=5, column=0, columnspan=3, sticky="nsew")
         self.tabs = ttk.Notebook(results)
@@ -294,6 +341,7 @@ class AdvisorWindow:
         self.report = None
         if hasattr(self, "save_button"):
             self.save_button.configure(state="disabled")
+            self.copilot_button.configure(state="disabled")
             for button in self.export_buttons:
                 button.configure(state="disabled")
             self.dashboard.clear()
@@ -349,11 +397,14 @@ class AdvisorWindow:
 
     def change_mode(self, _event: Any = None) -> None:
         self.invalidate_result()
+        self.azure_frame.grid_remove()
+        self.offline_frame.grid_remove()
+        self.modeler_frame.grid_remove()
         if self.values["mode"].get() == "connected":
-            self.offline_frame.grid_remove()
             self.azure_frame.grid()
+        elif self.values["mode"].get() == "modeler":
+            self.modeler_frame.grid()
         else:
-            self.azure_frame.grid_remove()
             self.offline_frame.grid()
 
     def disconnect(self) -> None:
@@ -439,6 +490,7 @@ class AdvisorWindow:
         self.save_button.configure(state="normal")
         for button in self.export_buttons:
             button.configure(state="normal")
+        self.copilot_button.configure(state="normal" if result["mode"] == "modeler" else "disabled")
         self.tabs.select(self.dashboard)
 
     def callback_error(self, exception_type: type[BaseException], exception: BaseException, traceback: Any) -> None:
@@ -462,6 +514,32 @@ class AdvisorWindow:
 
     def analyze(self) -> None:
         if self.busy:
+            return
+        if self.values["mode"].get() == "modeler":
+            self.invalidate_result()
+            try:
+                numeric_inputs: dict[str, float] = {}
+                for field, key in (
+                    ("period_hours", "modelPeriodHours"), ("compute_hours", "modelComputeHours"),
+                    ("payg_rate", "modelPaygRate"), ("discount_percent", "modelDiscountPercent"),
+                    ("hourly_commitment", "modelCommitment"),
+                ):
+                    try:
+                        numeric_inputs[field] = float(self.values[key].get())
+                    except ValueError as exc:
+                        raise ValueError(f"Enter a numeric value for {field.replace('_', ' ')}.") from exc
+                result = calculate_compute_model(
+                    period_hours=numeric_inputs["period_hours"], compute_hours=numeric_inputs["compute_hours"],
+                    payg_rate=numeric_inputs["payg_rate"], discount_percent=numeric_inputs["discount_percent"],
+                    hourly_commitment=numeric_inputs["hourly_commitment"],
+                    currency_code=self.values["modelCurrency"].get().strip().upper(),
+                    term=self.values["modelTerm"].get(),
+                )
+            except ValueError as exc:
+                self.set_output("Modeling failed. Check the period, compute hours and financial assumptions.")
+                messagebox.showerror("Modeling failed", str(exc), parent=self.root)
+                return
+            self.show_result(result)
             return
         if self.values["mode"].get() == "connected":
             tenant = self.values["tenantId"].get().strip()
@@ -510,6 +588,25 @@ class AdvisorWindow:
             messagebox.showerror("Analysis failed", str(exc), parent=self.root)
             return
         self.show_result(result)
+
+    def copy_for_copilot(self) -> None:
+        if self.result is None or self.result["mode"] != "modeler" or self.busy:
+            messagebox.showerror(APP_TITLE, "Run a compute-hours model for the current inputs first.", parent=self.root)
+            return
+        try:
+            prompt = copilot_prompt(redacted_result(self.result))
+            self.root.clipboard_clear()
+            self.root.clipboard_append(prompt)
+        except (ValueError, tk.TclError) as exc:
+            logging.error("Copilot prompt copy failed", extra={"error_type": type(exc).__name__})
+            messagebox.showerror(APP_TITLE, "Unable to copy the model prompt. Retry or use the JSON export.", parent=self.root)
+            return
+        messagebox.showinfo(
+            "Copilot prompt copied",
+            "Paste into your approved Copilot service for an explanation. Nothing was sent automatically. "
+            "The clipboard contains your financial assumptions and estimates; review them before sharing.",
+            parent=self.root,
+        )
 
     def export_report(self, kind: str) -> None:
         if self.report is None or self.result is None or self.busy:

@@ -74,6 +74,15 @@
   loops, and cross-scope continuation links are rejected before forwarding tokens.
 - The app does not send telemetry or upload CSV files. Offline CSV modes remain
   separate from live recommendations, with no silent fallback on Azure failures.
+- The compute-hours modeler runs locally with explicit user-entered financial
+  assumptions; it does not retrieve pricing or claim live Azure validation.
+  Its break-even explanations are calculation-based, not AI-generated.
+  Copy for Copilot writes only the current modeled inputs, calculated results
+  and limitations to the system clipboard, after an explicit user action.
+  No AI endpoint is called. Clipboard content is financial data and may be
+  accessible to clipboard history/sync or other applications; review it before
+  pasting into an approved service. App input changes invalidate the handoff,
+  but do not erase an already copied prompt or saved exports.
 - Input files are read locally; results are written only to the JSON export
   location selected by the user. Protect these files as financial data.
 - Connected exports intentionally include selected tenant/subscription context

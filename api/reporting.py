@@ -22,16 +22,25 @@ REPORT_FIELDS = (
     "hourlyCommitment", "baselineCost", "modeledCost", "savingsAmount",
     "savingsPercent", "coveragePercent", "utilizationPercent", "observationHours",
     "unusedCommitment", "overageCost", "remainingPaygCost", "projectedTermSavings",
+    "computeHours", "periodHours", "paygRate", "discountPercent", "commitmentCost",
+    "breakEvenHours", "breakEvenRuntimePercent", "runtimeMarginHours",
+    "projectedTermBaselineCost", "projectedTermModeledCost",
     "impact", "notes",
 )
 FIELD_LABELS = {
+    "computeHours": "Compute running hours", "periodHours": "Elapsed period hours",
+    "paygRate": "Assumed PAYG rate per running hour", "discountPercent": "Assumed discount (%)",
+    "commitmentCost": "Commitment cost (whole period)", "breakEvenHours": "Break-even running hours",
+    "breakEvenRuntimePercent": "Break-even runtime (%)", "runtimeMarginHours": "Runtime margin above break-even (hours)",
+    "projectedTermBaselineCost": "Projected full-term PAYG cost",
+    "projectedTermModeledCost": "Projected full-term commitment plus uncovered PAYG cost",
     "subscriptionId": "Subscription ID", "subscriptionName": "Subscription name",
     "recordType": "Record type", "label": "Recommendation / option", "reference": "Evidence reference",
     "source": "Source", "currency": "Currency", "term": "Term",
-    "hourlyCommitment": "Hourly commitment", "baselineCost": "Baseline cost (observation period)",
-    "modeledCost": "Modeled cost (observation period)", "savingsAmount": "Savings amount (observation period)",
+    "hourlyCommitment": "Hourly commitment", "baselineCost": "Baseline cost (report period)",
+    "modeledCost": "Modeled cost (report period)", "savingsAmount": "Savings amount (report period)",
     "savingsPercent": "Savings (%)", "coveragePercent": "Coverage (%)", "utilizationPercent": "Utilization (%)",
-    "observationHours": "Observation hours", "unusedCommitment": "Unused commitment cost",
+    "observationHours": "Report period hours", "unusedCommitment": "Unused commitment cost",
     "overageCost": "Overage cost", "remainingPaygCost": "Remaining PAYG cost",
     "projectedTermSavings": "Projected full-term savings (offline model only)", "impact": "Advisor impact",
     "notes": "Assumptions, warnings and details",
@@ -158,6 +167,39 @@ def build_report(result: dict[str, Any]) -> SavingsReport:
             "No commitment or savings is inferred when Azure omits a value. Check partial coverage before decisions.",
             "Azure recommendations are cached and may lag workload changes. Review in Azure before purchase.",
         ])
+    elif mode == "modeler":
+        context.extend([
+            f"Currency: {result['currencyCode']}", f"Term: {result['term']} ({result['termHours']} hours)",
+            f"Modeled period: {result['periodHours']} elapsed hours; runtime: {result['computeHours']} hours",
+            f"PAYG rate: {result['paygRate']} per running hour; discount: {result['discountPercent']}%",
+            f"Break-even attainable: {result['breakEvenAttainable']}; positive savings possible: {result['positiveSavingsPossible']}",
+        ])
+        coverage.append("Offline compute-hours model: user-supplied assumptions, no Azure pricing or live recommendation validation.")
+        notices.extend(result["guidance"])
+        numeric_fields = (
+            "hourlyCommitment", "baselineCost", "modeledCost", "savingsAmount", "savingsPercent",
+            "coveragePercent", "utilizationPercent", "unusedCommitment", "remainingPaygCost",
+            "projectedTermSavings", "computeHours", "periodHours", "paygRate", "discountPercent",
+            "commitmentCost", "breakEvenHours", "breakEvenRuntimePercent", "runtimeMarginHours",
+            "projectedTermBaselineCost", "projectedTermModeledCost",
+        )
+        records.append({
+            "recordType": "model", "label": "Compute-hours estimate (selected runtime)",
+            "source": result["source"], "currency": result["currencyCode"], "term": result["term"],
+            **{key: number(result.get(key)) for key in numeric_fields},
+            "observationHours": result["periodHours"],
+            "notes": "\n".join([f"Outcome: {result['outcome']}", *result["guidance"], *result["assumptions"]]),
+        })
+        for point in result["sensitivity"]:
+            records.append({
+                "recordType": "sensitivity", "label": f"{point['computeHours']:g} running hours",
+                "source": result["source"], "currency": result["currencyCode"], "term": result["term"],
+                **point, "hourlyCommitment": result["hourlyCommitment"],
+                "periodHours": result["periodHours"], "observationHours": result["periodHours"],
+                "notes": "Independent runtime scenario, not additive. Same rates, discount and elapsed commitment period.",
+            })
+        notices.append("Offline planning estimate. Period costs are projections, not observed Azure costs. "
+                       "Full-term figures repeat the assumed duty cycle; shorter modeling periods do not shorten the plan obligation.")
     else:
         context.extend([f"Currency: {clean_text(result['currencyCode'])}", f"Observed hours: {result['dataHours']}"])
         coverage.append("Offline model: no Azure data collection or live recommendation validation.")
@@ -197,13 +239,21 @@ def build_report(result: dict[str, Any]) -> SavingsReport:
         ("Data coverage", clean_text(result.get("completeness", "Offline model"))),
         ("Currencies (not summed)", ", ".join(currencies) or "Not supplied"),
     )
+    if mode == "modeler":
+        metrics = (
+            ("Projected period net savings", f"{display(result['savingsAmount'])} {result['currencyCode']}"),
+            ("Break-even running hours", display(result["breakEvenHours"]) if result["breakEvenHours"] is not None else "N/A (zero commitment)"),
+            ("Break-even feasible", "Yes" if result["breakEvenAttainable"] else "No"),
+            ("Modeled outcome", result["outcome"]),
+        )
     return SavingsReport(
         title="Savings plans", mode=mode,
         collected_at=clean_text(result.get("collectedAt") or datetime.now(timezone.utc).isoformat()),
         scope=(
             f"{len(result['context']['subscriptionIds'])} selected subscriptions (independent Single scopes)"
             if connected and "subscriptionIds" in result.get("context", {})
-            else "Selected subscription (Single)" if connected else "User-supplied hourly observations"
+            else "Selected subscription (Single)" if connected else
+            "One constant-rate workload; user-supplied compute hours" if mode == "modeler" else "User-supplied hourly observations"
         ),
         context=tuple(context), coverage=tuple(coverage), notices=tuple(dict.fromkeys(notices)),
         records=tuple(records), metrics=metrics,
@@ -223,6 +273,10 @@ def chart_records(report: SavingsReport) -> list[dict[str, Any]]:
 
 def report_charts(report: SavingsReport) -> list[tuple[str, str, str, list[dict[str, Any]]]]:
     charts = []
+    sensitivity = [row for row in report.records if row["recordType"] == "sensitivity"]
+    if sensitivity:
+        charts.append(("Net savings / loss at different running hours", "savingsAmount",
+                       f" {sensitivity[0]['currency']}", sensitivity))
     percentages = chart_records(report)
     if percentages:
         charts.append(("Savings percentage by recommendation / modeled option", "savingsPercent", "%", percentages))
@@ -308,7 +362,7 @@ def export_pdf(report: SavingsReport, path: Path) -> None:
             drawing.add(Rect(225, y - 2, 260 * abs(row[field]) / maximum, 10,
                              fillColor=colors.HexColor(BLUE if row[field] >= 0 else "#b54343"), strokeColor=None))
             drawing.add(String(490, y, f"{row[field]:.2f}{unit}", fontSize=7))
-        story.extend([drawing, paragraph(f"Showing {min(5, len(chart))} of {len(chart)} values; alternatives excluded. Each chart has its own scale. Full records follow.")])
+        story.extend([drawing, paragraph(f"Showing {min(5, len(chart))} of {len(chart)} values; alternatives excluded. Length = magnitude; red = negative. Each chart has its own scale. Full records follow.")])
     if not charts:
         story.append(paragraph("No returned numeric values to chart. Review source coverage."))
     story.append(paragraph("Scope, sources and limitations", "Heading2"))
@@ -422,7 +476,7 @@ def export_powerpoint(report: SavingsReport, path: Path) -> None:
             value.text = f"{row[field]:.2f}{unit}"
             value.paragraphs[0].font.size = Pt(13)
         note = page.shapes.add_textbox(Inches(.6), Inches(6.2), Inches(12), Inches(.5)).text_frame
-        note.text = f"Showing {min(5, len(chart))} of {len(chart)} values; alternatives excluded. Each chart has its own scale. All records follow."
+        note.text = f"Showing {min(5, len(chart))} of {len(chart)} values; length = magnitude, red = negative. Independent scales; alternatives excluded."
         note.paragraphs[0].font.size = Pt(12)
     pages("Scope, sources and limitations", [*report.context, *report.coverage, *report.notices])
     for record in report.records:

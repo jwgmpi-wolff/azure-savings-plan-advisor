@@ -1,6 +1,6 @@
 # Azure Savings Plan Advisor
 
-**Windows app:** [Get the Windows x64 app installer from this repository](downloads/windows/AzureSavingsPlanAdvisor-0.5.0-Setup-x64.exe).
+**Windows app:** [Get the Windows x64 app installer from this repository](downloads/windows/AzureSavingsPlanAdvisor-0.6.0-Setup-x64.exe).
 Open the file and select **Download raw file** on GitHub, or run it from your
 local clone. [Verify its SHA-256 checksum](downloads/windows/SHA256SUMS.txt).
 For API development, see [prerequisite installers](#windows-installers)
@@ -17,7 +17,7 @@ User -> Copilot Studio -> Entra-authenticated REST API -> Azure Function
 
 ## Install the Windows app
 
-1. Open [the installer checked into this repository](downloads/windows/AzureSavingsPlanAdvisor-0.5.0-Setup-x64.exe)
+1. Open [the installer checked into this repository](downloads/windows/AzureSavingsPlanAdvisor-0.6.0-Setup-x64.exe)
    and select **Download raw file**, or use the copy under `downloads\windows`
    in your local clone. The same installer is also available in
    [the repository downloads folder](downloads/windows).
@@ -135,6 +135,65 @@ these offline modes**, never for connected analysis. The installation's `samples
 folder contains a synthetic CSV for trying offline modeling. These estimates
 remain clearly distinct from live Azure recommendations, and CSV data is not uploaded.
 
+### Compute-hours modeler and break-even guidance
+
+Select **modeler**, enter the following, and select **Run report**. Neither a CSV
+nor Azure sign-in is required:
+
+- **Elapsed period hours**, such as 720 for a 30-day period.
+- **Compute running hours** within that period, for one constant-rate workload.
+  Fractional hours are supported; runtime cannot exceed elapsed hours. This is
+  not a model of aggregate instance-hours for parallel workloads.
+- Your **eligible PAYG rate per running hour**, **assumed Savings Plan discount**,
+  **hourly monetary commitment**, **currency**, and **P1Y/P3Y term**.
+  No price, discount, or commitment is guessed or fetched automatically.
+
+The dashboard shows projected period savings or loss, break-even running hours,
+whether break-even is attainable, and a table of the selected model plus
+independent runtime-sensitivity scenarios. Charts show savings/loss at different
+running hours, savings percentage, and hourly commitment. Red bars indicate
+negative values; lengths show magnitudes. Scenarios are not additive.
+PDF, PowerPoint, CSV and JSON retain the figures, inputs, guidance and limitations.
+
+For period hours `P`, runtime `H`, PAYG rate `R`, assumed discount fraction `d`,
+and hourly commitment `C`, the model uses:
+
+```text
+Avoided PAYG per running hour = min(R, C / (1 - d))
+PAYG cost                    = H * R
+Commitment cost              = P * C
+Uncovered PAYG               = H * (R - avoided PAYG per running hour)
+Modeled cost                 = commitment cost + uncovered PAYG
+Net savings                  = PAYG cost - modeled cost
+Break-even running hours     = (P * C) / avoided PAYG per running hour
+```
+
+Commitment is paid **every elapsed hour, including idle hours**; unused amounts
+do not roll over. Break-even is a runtime/utilization threshold over the entire
+period, **not a promise of payback after that many elapsed hours**. A threshold
+above the period is unattainable for this workload. Zero commitment means PAYG
+with no discount coverage and no meaningful break-even threshold. Zero discount
+cannot produce positive savings. Full-term cost/savings projections repeat the
+period's duty cycle for 365 days/year; modeling a shorter period does not shorten
+the financial obligation.
+
+**Example (synthetic assumptions, not Azure pricing):** 100 elapsed hours,
+90 running hours, 10 USD/running hour, 20% discount and 8 USD/hour commitment
+produce 900 USD PAYG versus 800 USD modeled cost, 100 USD period savings,
+80 USD unused commitment, and 80 break-even running hours. At only 50 running
+hours the same commitment produces a 300 USD loss.
+
+**Copilot handoff:** on-screen guidance is deterministic and explicitly labeled
+**calculation-based, not Copilot-generated**. **Copy for Copilot** copies a prompt
+with the calculated model, break-even figures and limitations. Paste it into your
+approved Copilot service for an AI explanation. This app does not connect to or
+send data to Copilot automatically; no AI endpoint or secret is configured.
+Clipboard contents contain financial inputs and estimates; review before sharing.
+Editing any input disables stale exports and the handoff until the model is rerun.
+Validate actual eligibility, rate, discount and Azure recommendations before
+making a purchase decision. Taxes, licensing, ineligible charges and consumption
+of unused commitment by other workloads are outside this single-workload model.
+
 The installer is currently **unsigned**; Windows SmartScreen may show a warning
 or organizational policy may block it. Verify the release's `SHA256SUMS.txt`
 and publisher/source before running; do not bypass your organization's policy.
@@ -150,7 +209,7 @@ From the project directory:
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-windows.txt
 if ($LASTEXITCODE -ne 0) { throw 'Windows build dependency installation failed.' }
-.\scripts\Build-WindowsInstaller.ps1 -Python .\.venv\Scripts\python.exe -Version 0.5.0
+.\scripts\Build-WindowsInstaller.ps1 -Python .\.venv\Scripts\python.exe -Version 0.6.0
 .\scripts\Test-WindowsInstaller.ps1
 ```
 
@@ -159,7 +218,7 @@ installer workflow also builds, tests installation/application launch/uninstall,
 and publishes these files when a version tag is pushed, when hosted runners
 are permitted. This repository's enterprise policy currently disables hosted
 runners; an enterprise administrator must enable them or provide an approved
-runner. Version 0.5.0 was built locally, with 108 passing tests, a verified
+runner. Version 0.6.0 was built locally, with 159 passing regression tests, a verified
 bundled-app launch/close and a checked installer checksum. The install/uninstall
 smoke test was not run locally because an existing installation is protected;
 run it under a separate Windows test user.

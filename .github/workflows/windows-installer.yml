@@ -23,7 +23,7 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: |
-          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '0.5.0' }
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '0.6.0' }
           .\scripts\Build-WindowsInstaller.ps1 -Version $version
       - name: Verify install, application launch, and uninstall
         shell: pwsh
@@ -41,5 +41,5 @@ jobs:
         run: |
           gh release create $env:GITHUB_REF_NAME .\dist\installer\*.exe .\dist\installer\SHA256SUMS.txt `
             --verify-tag --title "Azure Savings Plan Advisor $env:GITHUB_REF_NAME - Windows app" `
-            --notes "Windows x64 app with multi-subscription selection, name/ID filtering, combined results table, savings-percentage and currency-separated hourly commitment charts. CLI sign-in, discovery and token retrieval suppress terminal windows; browser sign-in/MFA remain visible. Includes PDF, PowerPoint, CSV and JSON exports with subscription provenance and partial-coverage warnings. Azure-connected analysis is the default; CSV is optional for offline modeling. Current Azure CLI is required for delegated Entra user sign-in. Python and export libraries are bundled. Each subscription is assessed at independent Single scope; recommendations and alternatives are not summed. Read-only decision support; no Azure resource mutations or plan purchases. Unsigned installer: Windows SmartScreen may warn. SHA256SUMS.txt contains the checksum."
+            --notes "Windows x64 app with a compute-hours modeler, user-supplied rates/discount/commitment, projected savings or loss, break-even runtime and usage-sensitivity charts. Local calculation-based guidance and Copy for Copilot handoff; no automatic AI connection or upload. Includes multi-subscription live Azure analysis, results tables and PDF/PowerPoint/CSV/JSON exports. CLI terminal windows are suppressed; browser sign-in/MFA remain visible. Current Azure CLI is required only for connected analysis; modeling needs no sign-in or CSV. No invented prices or discounts; scenarios are not additive. Read-only decision support, not a purchase recommendation. Unsigned installer. SHA256SUMS.txt contains the checksum."
           if ($LASTEXITCODE -ne 0) { throw 'GitHub release publication failed.' }

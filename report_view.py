@@ -50,13 +50,18 @@ class ReportView(ttk.Frame):
             value.pack(anchor="w")
             self.cards.append((title, value))
         self.coverage = ttk.Label(self, text="", wraplength=1050, foreground=TEAL)
+        self.model_guidance = ttk.Label(self, text="", wraplength=1050, foreground=NAVY)
+        self.model_guidance.pack(anchor="w", pady=(0, 8))
         self.chart = tk.Canvas(self, height=200, background="white", highlightthickness=0)
         self.chart.bind("<Configure>", lambda _event: self.draw_chart())
         table_frame = ttk.Frame(self)
         table_frame.pack(fill="both", expand=True, pady=(8, 0))
-        columns = ("type", "subscriptionName", "subscription", "label", "term", "currency", "commitment", "savings", "percent", "coverage", "utilization")
+        columns = ("type", "subscriptionName", "subscription", "label", "term", "currency", "commitment", "baseline",
+                   "cost", "savings", "percent", "coverage", "utilization", "runtime", "period", "breakeven", "unused")
         self.table = ttk.Treeview(table_frame, columns=columns, show="headings", height=7)
-        headings = ("Record", "Subscription name", "Subscription ID", "Recommendation / option", "Term", "Currency", "Hourly commitment", "Savings amount", "Savings %", "Coverage %", "Utilization %")
+        headings = ("Record", "Subscription name", "Subscription ID", "Recommendation / option", "Term", "Currency",
+                    "Hourly commitment", "PAYG baseline", "Modeled cost", "Savings amount", "Savings %", "Coverage %",
+                    "Utilization %", "Running hours", "Period hours", "Break-even hours", "Unused commitment")
         for column, heading in zip(columns, headings):
             self.table.heading(column, text=heading)
             self.table.column(column, width=125 if column != "label" else 250, minwidth=90, stretch=True)
@@ -79,7 +84,7 @@ class ReportView(ttk.Frame):
 
     def resize(self, event: tk.Event) -> None:
         width = max(300, event.width - 24)
-        for label in (self.subtitle, self.coverage, self.footnote):
+        for label in (self.subtitle, self.coverage, self.footnote, self.model_guidance):
             label.configure(wraplength=width)
         for title, value in self.cards:
             title.configure(wraplength=max(100, width // 4 - 30))
@@ -89,6 +94,7 @@ class ReportView(ttk.Frame):
         self.report = None
         self.subtitle.configure(text="Report cleared. Run analysis for the current context.")
         self.coverage.configure(text="")
+        self.model_guidance.configure(text="")
         for title, value in self.cards:
             title.configure(text="Awaiting report")
             value.configure(text="--")
@@ -104,11 +110,29 @@ class ReportView(ttk.Frame):
             title.configure(text=label)
             value.configure(text=text)
         self.coverage.configure(text="\n".join(report.coverage))
+        self.table.configure(displaycolumns=(
+            ("label", "runtime", "baseline", "cost", "savings", "breakeven", "currency", "commitment",
+             "period", "unused", "percent", "coverage", "utilization", "term", "type")
+            if report.mode == "modeler" else
+            ("type", "subscriptionName", "subscription", "label", "term", "currency", "commitment",
+             "baseline", "cost", "savings", "percent", "coverage", "utilization")
+        ))
+        if report.mode == "modeler":
+            model = report.records[0]
+            self.model_guidance.configure(text=(
+                "Calculation-based guidance (not Copilot-generated): commitment is paid for every elapsed hour, including idle hours. "
+                f"Period commitment: {display(model['commitmentCost'])} {model['currency']}; "
+                f"break-even runtime: {display(model['breakEvenHours'])} hours. "
+                "The threshold is not an elapsed-time payback promise. "
+                "Review full guidance and repeated-duty-cycle term projections in Evidence & details. "
+                "Copy for Copilot prepares a prompt only; it does not send data."
+            ))
         for index, record in enumerate(report.records):
             self.table.insert("", "end", iid=str(index), values=[
                 display(record.get(key)) for key in (
-                    "recordType", "subscriptionName", "subscriptionId", "label", "term", "currency", "hourlyCommitment", "savingsAmount",
-                    "savingsPercent", "coveragePercent", "utilizationPercent",
+                    "recordType", "subscriptionName", "subscriptionId", "label", "term", "currency", "hourlyCommitment",
+                    "baselineCost", "modeledCost", "savingsAmount", "savingsPercent", "coveragePercent", "utilizationPercent",
+                    "computeHours", "periodHours", "breakEvenHours", "unusedCommitment",
                 )
             ])
         self.draw_chart()
@@ -137,4 +161,4 @@ class ReportView(ttk.Frame):
                 self.chart.create_rectangle(start, y - 7, end, y + 7, fill="#e4eaf2", outline="")
                 self.chart.create_rectangle(start, y - 7, start + length, y + 7, fill=BLUE if record[field] >= 0 else "#b54343", outline="")
                 self.chart.create_text(width - 8, y, anchor="e", text=f"{record[field]:.2f}{unit}", fill=NAVY)
-            self.chart.create_text(8, offset + 189, anchor="w", text=f"Showing {len(shown)} of {len(rows)} values; alternatives excluded. Independent scales; full records in table and exports.", fill=NAVY, font=("Segoe UI", 8))
+            self.chart.create_text(8, offset + 189, anchor="w", text=f"Showing {len(shown)} of {len(rows)} values; alternatives excluded. Length = magnitude; red = negative. Independent scales.", fill=NAVY, font=("Segoe UI", 8))
