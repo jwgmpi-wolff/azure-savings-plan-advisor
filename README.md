@@ -156,8 +156,17 @@ if ($LASTEXITCODE -ne 0) { throw 'Windows build dependency installation failed.'
 
 The installer and checksum are written under `dist\installer`. The Windows
 installer workflow also builds, tests installation/application launch/uninstall,
-and publishes these files when a version tag is pushed. Signing requires a
-separately provisioned code-signing certificate; none is stored in this repo.
+and publishes these files when a version tag is pushed, when hosted runners
+are permitted. This repository's enterprise policy currently disables hosted
+runners; an enterprise administrator must enable them or provide an approved
+runner. Version 0.5.0 was built locally, with 108 passing tests, a verified
+bundled-app launch/close and a checked installer checksum. The install/uninstall
+smoke test was not run locally because an existing installation is protected;
+run it under a separate Windows test user.
+
+The build script finds Inno Setup on PATH or in its standard machine/per-user
+installation directory. Signing requires a separately provisioned code-signing
+certificate; none is stored in this repo.
 
 ## Decision-support boundary
 

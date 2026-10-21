@@ -9,8 +9,13 @@ $projectRoot = Split-Path $PSScriptRoot -Parent
 Push-Location $projectRoot
 try {
     $compiler = Get-Command ISCC.exe -ErrorAction SilentlyContinue
-    $iscc = if ($compiler) { $compiler.Source } else { "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
-    if (-not (Test-Path -LiteralPath $iscc)) { throw 'Install Inno Setup 6 before building the Windows installer.' }
+    $iscc = if ($compiler) { $compiler.Source } else {
+        @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+        ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    }
+    if (-not $iscc) { throw 'Install Inno Setup 6 before building the Windows installer.' }
     & $Python -m PyInstaller --noconfirm --clean --windowed --onedir `
         --name AzureSavingsPlanAdvisor --collect-all jsonschema_specifications `
         --copy-metadata jsonschema .\desktop_app.py
