@@ -3,14 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
-import subprocess
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
 from azure.core.exceptions import ClientAuthenticationError
-from azure.identity import AzureCliCredential
+from .desktop_identity import SilentAzureCliCredential, run_cli
 
 from .azure_provider import (
     MANAGEMENT_RESOURCE,
@@ -40,20 +38,16 @@ class DesktopAzure:
         self.subscriptions = []
 
     def current_tenant(self) -> str:
-        executable = shutil.which("az")
-        if not executable:
-            raise ValueError("Install Azure CLI from the README, then restart the app.")
         try:
-            result = subprocess.run(
-                [executable, "account", "show", "--query", "{tenantId:tenantId,userType:user.type}",
+            result = run_cli(
+                ["account", "show", "--query", "{tenantId:tenantId,userType:user.type}",
                  "--output", "json", "--only-show-errors"],
-                capture_output=True, timeout=60, check=False,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                timeout=60,
             )
             if result.returncode:
                 raise ConnectedProviderError("Sign in with Azure CLI as a user, then refresh context.")
             account = json.loads(result.stdout)
-        except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+        except (ClientAuthenticationError, ValueError) as exc:
             raise ConnectedProviderError("Unable to read Azure CLI user context. Sign in again.") from exc
         if not isinstance(account, dict) or account.get("userType") != "user":
             raise ConnectedProviderError("The desktop app requires an interactive user account, not a service principal or managed identity.")
@@ -62,22 +56,18 @@ class DesktopAzure:
     def sign_in(self, tenant_id: str) -> str:
         tenant_id = context_id(tenant_id) if tenant_id else ""
         self.clear()
-        executable = shutil.which("az")
-        if not executable:
-            raise ValueError("Install Azure CLI from the README, then restart the app to sign in.")
         try:
-            result = subprocess.run(
-                [executable, "login", * (["--tenant", tenant_id] if tenant_id else []),
+            result = run_cli(
+                ["login", *(["--tenant", tenant_id] if tenant_id else []),
                  "--allow-no-subscriptions", "--output", "none", "--only-show-errors"],
-                capture_output=True, timeout=300, check=False,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                timeout=300,
                 env={
                     **os.environ,
                     "AZURE_CORE_LOGIN_EXPERIENCE_V2": "off",
                     "AZURE_CORE_ENABLE_BROKER_ON_WINDOWS": "false",
                 },
             )
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        except ClientAuthenticationError as exc:
             raise ConnectedProviderError("Azure sign-in could not complete. Retry sign-in in the selected tenant.") from exc
         if result.returncode:
             raise ConnectedProviderError(
@@ -93,7 +83,7 @@ class DesktopAzure:
         current_tenant = self.current_tenant()
         tenant_id = context_id(tenant_id) if tenant_id else current_tenant
         try:
-            with AzureCliCredential(tenant_id=tenant_id, process_timeout=60) as credential:
+            with SilentAzureCliCredential(tenant_id=tenant_id, process_timeout=60) as credential:
                 token = credential.get_token(MANAGEMENT_RESOURCE).token
                 tenants = arm_list(
                     "https://management.azure.com/tenants", token,
@@ -155,7 +145,7 @@ class DesktopAzure:
             ),
         }
         try:
-            with AzureCliCredential(tenant_id=tenant_id, process_timeout=60) as credential:
+            with SilentAzureCliCredential(tenant_id=tenant_id, process_timeout=60) as credential:
                 token = credential.get_token(MANAGEMENT_RESOURCE).token
                 try:
                     items = arm_list(
@@ -184,6 +174,57 @@ class DesktopAzure:
                     result["coverage"]["savingsPlan"].update({"status": exc.status, "message": str(exc)})
         except ClientAuthenticationError as exc:
             raise ConnectedProviderError("Azure authentication expired or was denied. Sign in again to the selected tenant.") from exc
+        result["completeness"] = (
+            "partial" if any(item["status"] not in ("ok", "empty") for item in result["coverage"].values()) else "complete"
+        )
+        return result
+
+    def analyze_many(
+        self, tenant_id: str, subscription_ids: list[str], term: str, lookback: str,
+    ) -> dict[str, Any]:
+        tenant_id = context_id(tenant_id)
+        selected = sorted({context_id(value) for value in subscription_ids})
+        if not selected:
+            raise ValueError("Select at least one subscription.")
+        if term not in TERMS or lookback not in LOOKBACK_PERIODS:
+            raise ValueError("Select a valid Savings Plan term and lookback period.")
+        self.refresh(tenant_id)
+        names = {item["subscriptionId"]: item["name"] for item in self.subscriptions}
+        if any(value not in names for value in selected):
+            raise ValueError("A selected subscription is not enabled or accessible in the selected tenant. Refresh context.")
+        result: dict[str, Any] = {
+            "mode": "connected", "source": "Azure Advisor and Azure Cost Management",
+            "collectedAt": datetime.now(timezone.utc).isoformat(),
+            "context": {"tenantId": tenant_id, "subscriptionIds": selected},
+            "filters": {"term": term, "lookbackPeriod": lookback, "recommendationScope": "Single"},
+            "coverage": {}, "recommendations": [], "advisorRecommendations": [],
+            "notice": (
+                "Each subscription is assessed independently at Single scope using existing Azure recommendations. "
+                "No CSV is required. Commitments and savings are not added across subscriptions or alternatives. "
+                "Advisor Cost actions are not all Savings Plans; hourly commitments come from Cost Management. "
+                "Advisor uses cached recommendations; its Savings Plan lookback is typically 30 days. "
+                "No estimate is substituted for denied, unavailable or empty data."
+            ),
+        }
+        for subscription_id in selected:
+            metadata = {"subscriptionId": subscription_id, "subscriptionName": names[subscription_id]}
+            try:
+                collected = self.analyze(tenant_id, subscription_id, term, lookback)
+            except (ConnectedProviderError, ValueError) as exc:
+                status = exc.status if isinstance(exc, ConnectedProviderError) else "unavailable"
+                for source in ("advisor", "savingsPlan"):
+                    result["coverage"][f"{subscription_id}/{source}"] = {
+                        **metadata, "status": status, "message": str(exc),
+                        "source": "Azure Advisor" if source == "advisor" else "Azure Cost Management",
+                        "apiVersion": "2025-01-01" if source == "advisor" else "2026-06-01",
+                    }
+                continue
+            for key in ("recommendations", "advisorRecommendations"):
+                result[key].extend({**item, **metadata} for item in collected[key])
+            for source, coverage in collected["coverage"].items():
+                result["coverage"][f"{subscription_id}/{source}"] = {
+                    **coverage, **metadata, "collectedAt": collected["collectedAt"],
+                }
         result["completeness"] = (
             "partial" if any(item["status"] not in ("ok", "empty") for item in result["coverage"].values()) else "complete"
         )

@@ -1,6 +1,6 @@
 # Azure Savings Plan Advisor
 
-**Windows app:** [Get the Windows x64 app installer from this repository](downloads/windows/AzureSavingsPlanAdvisor-0.4.1-Setup-x64.exe).
+**Windows app:** [Get the Windows x64 app installer from this repository](downloads/windows/AzureSavingsPlanAdvisor-0.5.0-Setup-x64.exe).
 Open the file and select **Download raw file** on GitHub, or run it from your
 local clone. [Verify its SHA-256 checksum](downloads/windows/SHA256SUMS.txt).
 For API development, see [prerequisite installers](#windows-installers)
@@ -17,7 +17,7 @@ User -> Copilot Studio -> Entra-authenticated REST API -> Azure Function
 
 ## Install the Windows app
 
-1. Open [the installer checked into this repository](downloads/windows/AzureSavingsPlanAdvisor-0.4.1-Setup-x64.exe)
+1. Open [the installer checked into this repository](downloads/windows/AzureSavingsPlanAdvisor-0.5.0-Setup-x64.exe)
    and select **Download raw file**, or use the copy under `downloads\windows`
    in your local clone. The same installer is also available in
    [the repository downloads folder](downloads/windows).
@@ -31,10 +31,14 @@ User -> Copilot Studio -> Entra-authenticated REST API -> Azure Function
    Select **Sign in / switch tenant** and complete Entra sign-in in your browser.
    Leave the tenant blank for initial sign-in, or enter/select an approved tenant
    GUID to switch directories, including guest directories.
-4. Select an accessible subscription explicitly, choose P1Y/P3Y and the lookback,
-   then select **Analyze**. **No CSV or assumed discount is required.**
+4. Select one or more accessible subscriptions using Ctrl/Shift, or **Select all shown**.
+   Filter by name or ID; selections remain selected when hidden by the filter.
+   **Clear selections** clears all selected subscriptions, including hidden ones.
+   Choose P1Y/P3Y and the lookback, then select **Run report**.
+   **No CSV or assumed discount is required.**
 5. Review the **Executive dashboard** for summary cards, savings-percentage
-   bars and the recommendation table; **Evidence & details** includes the
+   bars, hourly commitment charts and the combined recommendation table;
+   **Evidence & details** includes the
    assumptions, warnings and underlying Azure values.
 6. Use **Executive PDF**, **Executive PowerPoint**, **Export CSV** or **JSON**
    to save your current results.
@@ -50,6 +54,15 @@ The screen, PDF, PowerPoint (`.pptx`) and CSV use the same normalized report:
 - Savings-percentage charts show up to five primary recommendations or modeled
   options. The count of displayed/available percentages is explicit; all records,
   including Azure's alternatives and Advisor actions, remain in the table/exports.
+- Hourly commitment charts show up to five primary recommendations or modeled
+  options per currency, with subscription/term labels and independent scales.
+  Missing amounts and alternatives are excluded from charts; nothing is added
+  across subscriptions, currencies or alternatives. PDF and PowerPoint include
+  the same charts.
+- The scrollable results table includes subscription name/ID, recommendation,
+  term, currency, hourly commitment, savings amount/percentage, coverage and
+  utilization. Source coverage is shown separately for each selected subscription.
+  A failed subscription does not discard successful results from the others.
 - PDF and PowerPoint include the executive summary, chart when percentages are
   available, scope, collection time, source coverage/API versions, evidence
   references, details and limitations. Long reports paginate instead of dropping
@@ -77,9 +90,12 @@ The screen, PDF, PowerPoint (`.pptx`) and CSV use the same normalized report:
   and enabled subscriptions. A blank tenant uses the current CLI user's context.
   Only subscriptions belonging to the selected tenant are offered. Membership
   is rechecked before every collection; a service-principal CLI login is rejected.
+- Azure CLI commands for sign-in, context discovery and token retrieval run
+  without terminal windows. Browser sign-in and MFA remain visible. Use a current
+  Azure CLI version (2.54 or later for UTC token expiry support).
 - Switching tenant/subscription clears previous results and disables stale exports.
   The app does not call `az account set`; requests use a tenant-specific delegated
-  credential and the explicitly selected subscription. Sign-in may update the
+  credential and explicitly selected subscriptions. Sign-in may update the
   shared Azure CLI account cache. **Disconnect app** clears app state only; use
   `az logout` separately if you intend to clear CLI credentials.
 - The desktop app calls Azure directly; no Function deployment or API client
@@ -97,7 +113,9 @@ The screen, PDF, PowerPoint (`.pptx`) and CSV use the same normalized report:
 - The [Benefit Recommendations API](https://learn.microsoft.com/en-us/rest/api/cost-management/benefit-recommendations/list)
   supplies Microsoft's recommended hourly commitment, savings, coverage and
   utilization, with any returned alternative commitments. The desktop uses
-  **Single/subscription scope**; shared billing scope remains an API capability.
+  **Single/subscription scope**, independently for each selected subscription;
+  selecting several subscriptions does not create a shared-scope commitment.
+  Shared billing scope remains an API capability.
   [Microsoft documents](https://learn.microsoft.com/en-us/azure/cost-management-billing/savings-plan/choose-commitment-amount)
   that Advisor Savings Plan recommendations use a 30-day lookback; the Benefit
   Recommendations API supports the app's 7/30/60-day selection.
@@ -132,7 +150,7 @@ From the project directory:
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-windows.txt
 if ($LASTEXITCODE -ne 0) { throw 'Windows build dependency installation failed.' }
-.\scripts\Build-WindowsInstaller.ps1 -Python .\.venv\Scripts\python.exe -Version 0.4.1
+.\scripts\Build-WindowsInstaller.ps1 -Python .\.venv\Scripts\python.exe -Version 0.5.0
 .\scripts\Test-WindowsInstaller.ps1
 ```
 

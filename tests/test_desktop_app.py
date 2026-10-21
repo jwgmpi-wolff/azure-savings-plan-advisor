@@ -32,7 +32,7 @@ def tk_root(tk_interpreter):
     window.withdraw()
     yield window
     for identifier in tk_interpreter.tk.call("after", "info"):
-        tk_interpreter.after_cancel(identifier)
+        window.after_cancel(identifier)
     if window.winfo_exists():
         window.destroy()
 
@@ -151,28 +151,90 @@ def test_connected_window_defaults_to_azure_without_csv_and_clears_on_tenant_cha
             "tenantId": tenant, "tenants": [tenant, other],
             "subscriptions": [{"subscriptionId": subscription, "name": "Synthetic subscription"}],
         })
-        window.values["subscription"].set(next(iter(window.subscription_ids)))
-        with patch.object(window.azure, "analyze", return_value=result) as analyze:
+        window.select_subscriptions()
+        with patch.object(window.azure, "analyze_many", return_value=result) as analyze:
             window.analyze()
             deadline = time.monotonic() + 5
             while window.busy and time.monotonic() < deadline:
                 root.update()
                 time.sleep(0.01)
             assert not window.busy
-        analyze.assert_called_once_with(tenant, subscription, "P1Y", "Last30Days")
+        analyze.assert_called_once_with(tenant, [subscription], "P1Y", "Last30Days")
         assert "Hourly commitment: 4.25 USD" in window.output.get("1.0", "end")
         assert window.result == result
         assert window.report.metrics[0][1] == "1"
         window.values["tenantId"].set(other)
         assert window.result is None
         assert window.subscription_ids == {}
-        assert window.values["subscription"].get() == ""
+        assert window.selected_subscription_ids == set()
         assert str(window.save_button["state"]) == "disabled"
         assert "4.25" not in window.output.get("1.0", "end")
         assert window.report is None
         assert not window.dashboard.table.get_children()
     finally:
         root.destroy()
+
+
+def test_multiple_subscription_selection_filtering_and_invalidation(tk_root):
+    tenant = "00000000-0000-0000-0000-000000000001"
+    subscriptions = [
+        {"subscriptionId": "00000000-0000-0000-0000-000000000002", "name": "Finance"},
+        {"subscriptionId": "00000000-0000-0000-0000-000000000003", "name": "Engineering"},
+    ]
+    window = AdvisorWindow(tk_root)
+    window.select_subscriptions()
+    assert window.selected_subscription_ids == set()
+    window.context_loaded({"tenantId": tenant, "tenants": [tenant], "subscriptions": subscriptions})
+    assert window.selected_subscription_ids == set()
+    window.select_subscriptions()
+    assert window.selected_subscription_ids == {item["subscriptionId"] for item in subscriptions}
+    window.subscription_filter.set("Finance")
+    assert window.subscription_list.size() == 1
+    assert len(window.selected_subscription_ids) == 2
+    window.subscription_list.selection_clear(0, "end")
+    window.subscription_selection_changed()
+    assert window.selected_subscription_ids == {subscriptions[1]["subscriptionId"]}
+    window.subscription_filter.set("")
+    window.select_subscriptions()
+    with patch.object(window, "run_task") as task, patch.object(window.azure, "analyze_many") as analyze:
+        window.analyze()
+        task.call_args.args[0]()
+        analyze.assert_called_once_with(
+            tenant, sorted(item["subscriptionId"] for item in subscriptions), "P1Y", "Last30Days",
+        )
+    connected = {
+        "collectedAt": "2026-01-01T00:00:00Z", "notice": "Synthetic fixture",
+        "filters": {"term": "P1Y", "lookbackPeriod": "Last30Days"},
+        "mode": "connected", "context": {"tenantId": tenant, "subscriptionIds": [
+            item["subscriptionId"] for item in subscriptions
+        ]}, "completeness": "complete", "coverage": {}, "advisorRecommendations": [],
+        "recommendations": [
+            {**item, "term": "P1Y", "currencyCode": "USD", "subscriptionName": item["name"],
+             "recommendationDetails": {"commitmentAmount": 4.25, "savingsPercentage": 20}}
+            for item in subscriptions
+        ],
+    }
+    window.show_result(connected)
+    assert len(window.dashboard.table.get_children()) == 2
+    first = window.dashboard.table.item("0", "values")
+    assert subscriptions[0]["name"] in first and subscriptions[0]["subscriptionId"] in first
+    assert "4.25" in first
+    chart_text = " ".join(
+        window.dashboard.chart.itemcget(item, "text")
+        for item in window.dashboard.chart.find_all() if window.dashboard.chart.type(item) == "text"
+    )
+    assert "Savings percentage" in chart_text and "Hourly commitment" in chart_text
+    assert "Finance" in chart_text and "Engineering" in chart_text
+    window.show_result(analyze_csv_file(SAMPLE, assumptions()))
+    window.clear_subscriptions()
+    assert window.result is None
+    assert window.selected_subscription_ids == set()
+    assert all(str(button["state"]) == "disabled" for button in window.export_buttons)
+    window.select_subscriptions()
+    window.values["tenantId"].set("00000000-0000-0000-0000-000000000004")
+    assert window.subscription_list.size() == 0
+    assert window.selected_subscription_ids == set()
+    tk_root.destroy()
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows desktop interaction test")

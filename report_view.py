@@ -3,7 +3,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
-from api.reporting import BLUE, NAVY, PALE, TEAL, SavingsReport, chart_records, display
+from api.reporting import BLUE, NAVY, PALE, TEAL, SavingsReport, chart_label, display, report_charts
 
 
 def apply_theme(root: tk.Tk) -> None:
@@ -50,15 +50,13 @@ class ReportView(ttk.Frame):
             value.pack(anchor="w")
             self.cards.append((title, value))
         self.coverage = ttk.Label(self, text="", wraplength=1050, foreground=TEAL)
-        self.coverage.pack(anchor="w", pady=(0, 8))
         self.chart = tk.Canvas(self, height=200, background="white", highlightthickness=0)
-        self.chart.pack(fill="x")
         self.chart.bind("<Configure>", lambda _event: self.draw_chart())
         table_frame = ttk.Frame(self)
         table_frame.pack(fill="both", expand=True, pady=(8, 0))
-        columns = ("type", "label", "currency", "commitment", "savings", "percent", "coverage", "utilization")
+        columns = ("type", "subscriptionName", "subscription", "label", "term", "currency", "commitment", "savings", "percent", "coverage", "utilization")
         self.table = ttk.Treeview(table_frame, columns=columns, show="headings", height=7)
-        headings = ("Record", "Recommendation / option", "Currency", "Hourly commitment", "Savings amount", "Savings %", "Coverage %", "Utilization %")
+        headings = ("Record", "Subscription name", "Subscription ID", "Recommendation / option", "Term", "Currency", "Hourly commitment", "Savings amount", "Savings %", "Coverage %", "Utilization %")
         for column, heading in zip(columns, headings):
             self.table.heading(column, text=heading)
             self.table.column(column, width=125 if column != "label" else 250, minwidth=90, stretch=True)
@@ -70,6 +68,8 @@ class ReportView(ttk.Frame):
         horizontal.grid(row=1, column=0, sticky="ew")
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
+        self.chart.pack(fill="x", pady=(12, 0))
+        self.coverage.pack(anchor="w", pady=(8, 0))
         self.footnote = ttk.Label(
             self, text="No values are added across plans, alternatives, or currencies. Full evidence and assumptions are in Details and exports.",
             wraplength=1050, font=("Segoe UI", 9),
@@ -107,7 +107,7 @@ class ReportView(ttk.Frame):
         for index, record in enumerate(report.records):
             self.table.insert("", "end", iid=str(index), values=[
                 display(record.get(key)) for key in (
-                    "recordType", "label", "currency", "hourlyCommitment", "savingsAmount",
+                    "recordType", "subscriptionName", "subscriptionId", "label", "term", "currency", "hourlyCommitment", "savingsAmount",
                     "savingsPercent", "coveragePercent", "utilizationPercent",
                 )
             ])
@@ -118,20 +118,23 @@ class ReportView(ttk.Frame):
         if self.report is None:
             return
         width = max(self.chart.winfo_width(), 650)
-        self.chart.create_text(8, 12, anchor="w", text="Savings percentage by recommendation / modeled option", fill=NAVY, font=("Segoe UI", 11, "bold"))
-        rows = chart_records(self.report)
-        if not rows:
+        charts = report_charts(self.report)
+        self.chart.configure(height=max(85, len(charts) * 215))
+        if not charts:
             self.chart.create_text(8, 55, anchor="w", text="No returned savings percentages to chart. See source coverage and details.", fill=NAVY)
             return
-        maximum = max(max(abs(record["savingsPercent"]) for record in rows), 1)
-        shown = rows[:5]
-        for index, record in enumerate(shown):
-            y = 45 + index * 27
-            label = f"{record.get('term', '')} {record['label']}"
-            self.chart.create_text(8, y, anchor="w", text=label[:45], fill=NAVY, font=("Segoe UI", 9))
-            start = 315
-            length = (width - start - 90) * abs(record["savingsPercent"]) / maximum
-            self.chart.create_rectangle(start, y - 7, width - 75, y + 7, fill="#e4eaf2", outline="")
-            self.chart.create_rectangle(start, y - 7, start + length, y + 7, fill=BLUE if record["savingsPercent"] >= 0 else "#b54343", outline="")
-            self.chart.create_text(width - 8, y, anchor="e", text=f"{record['savingsPercent']:.2f}%", fill=NAVY)
-        self.chart.create_text(8, 189, anchor="w", text=f"Showing {len(shown)} of {len(rows)} available percentages; alternatives excluded. All records are in the table and exports.", fill=NAVY, font=("Segoe UI", 8))
+        for chart_index, (title, field, unit, rows) in enumerate(charts):
+            offset = chart_index * 215
+            self.chart.create_text(8, offset + 12, anchor="w", text=title, fill=NAVY, font=("Segoe UI", 11, "bold"))
+            maximum = max(max(abs(record[field]) for record in rows), .01)
+            shown = rows[:5]
+            for index, record in enumerate(shown):
+                y = offset + 45 + index * 27
+                self.chart.create_text(8, y, anchor="w", text=chart_label(record)[:45], fill=NAVY, font=("Segoe UI", 9))
+                start = 315
+                end = width - 120
+                length = (end - start) * abs(record[field]) / maximum
+                self.chart.create_rectangle(start, y - 7, end, y + 7, fill="#e4eaf2", outline="")
+                self.chart.create_rectangle(start, y - 7, start + length, y + 7, fill=BLUE if record[field] >= 0 else "#b54343", outline="")
+                self.chart.create_text(width - 8, y, anchor="e", text=f"{record[field]:.2f}{unit}", fill=NAVY)
+            self.chart.create_text(8, offset + 189, anchor="w", text=f"Showing {len(shown)} of {len(rows)} values; alternatives excluded. Independent scales; full records in table and exports.", fill=NAVY, font=("Segoe UI", 8))

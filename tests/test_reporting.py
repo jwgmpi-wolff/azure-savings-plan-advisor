@@ -8,7 +8,7 @@ from pypdf import PdfReader
 
 from api.reporting import (
     build_report, chart_records, clean_text, export_csv, export_pdf,
-    export_powerpoint, redacted_result, write_report,
+    export_powerpoint, redacted_result, write_report, report_charts,
 )
 from desktop_app import analyze_csv_file
 
@@ -98,6 +98,17 @@ def test_mixed_currencies_are_not_aggregated(connected_result):
     assert report.metrics[-1] == ("Currencies (not summed)", "EUR, USD")
     assert {row["currency"] for row in report.records} == {"EUR", "USD"}
     assert not any("total savings" in label.lower() for label, _ in report.metrics)
+    charts = report_charts(report)
+    assert len(charts) == 3
+    assert charts[0][1] == "savingsPercent"
+    assert [chart[2] for chart in charts[1:]] == [" EUR/h", " USD/h"]
+    assert all(len(rows) == 1 for _, _, _, rows in charts[1:])
+    assert all(row["recordType"] == "savingsPlan" for _, _, _, rows in charts for row in rows)
+
+
+def test_charts_do_not_invent_missing_amounts(connected_result):
+    connected_result["recommendations"][0]["recommendationDetails"] = {}
+    assert report_charts(build_report(connected_result)) == []
 
 
 @pytest.mark.parametrize("kind,exporter,reader", [

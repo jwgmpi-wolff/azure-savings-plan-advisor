@@ -50,7 +50,7 @@ def format_result(result: dict[str, Any]) -> str:
             f"Collected at: {result['collectedAt']}",
             f"Coverage: {result['completeness']}",
             f"Term: {result['filters']['term']} | Lookback: {result['filters']['lookbackPeriod']}",
-            "Scope: selected subscription (Single). No CSV was used.",
+            f"Scope: {len(result.get('context', {}).get('subscriptionIds', [None]))} selected subscription(s), independent Single scopes. No CSV was used.",
             result["notice"],
             "",
         ]
@@ -67,6 +67,7 @@ def format_result(result: dict[str, Any]) -> str:
             currency = recommendation.get("currencyCode", "Currency not supplied by Azure")
             lines.extend([
                 f"Reference: {recommendation.get('recommendationReference', 'Not supplied')}",
+                f"  Subscription: {recommendation.get('subscriptionName', 'Not supplied')} ({recommendation.get('subscriptionId', 'Not supplied')})",
                 f"  Term: {recommendation.get('term', 'Not supplied')}",
                 f"  Hourly commitment: {details.get('commitmentAmount', 'Not supplied')} {currency}",
                 f"  Granularity: {recommendation.get('commitmentGranularity', 'Savings Plan hourly commitment')}",
@@ -85,6 +86,7 @@ def format_result(result: dict[str, Any]) -> str:
         for recommendation in result["advisorRecommendations"]:
             lines.extend([
                 f"Reference: {recommendation['recommendationReference']} | Impact: {recommendation['impact']}",
+                f"  Subscription: {recommendation.get('subscriptionName', 'Not supplied')} ({recommendation.get('subscriptionId', 'Not supplied')})",
                 f"  Problem: {recommendation['problem']}",
                 f"  Action: {recommendation['solution']}",
                 f"  Azure last updated: {recommendation['lastUpdated']}",
@@ -125,6 +127,8 @@ class AdvisorWindow:
         self.busy = False
         self.events: queue.Queue[tuple[Callable[[Any], None], Any, str | None]] = queue.Queue()
         self.subscription_ids: dict[str, str] = {}
+        self.selected_subscription_ids: set[str] = set()
+        self.visible_subscriptions: list[str] = []
         root.title(APP_TITLE)
         root.geometry("1280x960")
         root.minsize(850, 650)
@@ -163,7 +167,6 @@ class AdvisorWindow:
         self.azure_frame.columnconfigure(1, weight=1)
         azure_fields = [
             ("tenantId", "Tenant GUID (blank for initial sign-in)", None, ""),
-            ("subscription", "Subscription", (), ""),
             ("azureTerm", "Savings Plan term", ("P1Y", "P3Y"), "P1Y"),
             ("lookback", "Lookback period", ("Last7Days", "Last30Days", "Last60Days"), "Last30Days"),
         ]
@@ -178,10 +181,34 @@ class AdvisorWindow:
             self.context_controls.append(widget)
             if key == "tenantId":
                 self.tenant_combo = widget
-            if key == "subscription":
-                self.subscription_combo = widget
+        picker = ttk.LabelFrame(self.azure_frame, text="Subscriptions - select one or more", padding=8)
+        picker.grid(row=3, column=0, columnspan=3, sticky="ew", pady=8)
+        picker.columnconfigure(0, weight=1)
+        self.subscription_filter = tk.StringVar()
+        search = ttk.Entry(picker, textvariable=self.subscription_filter)
+        search.grid(row=0, column=0, sticky="ew")
+        ttk.Label(picker, text="Filter by name or ID; use Ctrl/Shift to select multiple").grid(row=1, column=0, sticky="w")
+        self.subscription_list = tk.Listbox(
+            picker, selectmode="extended", exportselection=False, height=5,
+            background="white", foreground=NAVY, selectbackground="#d8eeef", selectforeground=NAVY,
+        )
+        self.subscription_list.grid(row=2, column=0, sticky="ew")
+        scroll = ttk.Scrollbar(picker, orient="vertical", command=self.subscription_list.yview)
+        scroll.grid(row=2, column=1, sticky="ns")
+        self.subscription_list.configure(yscrollcommand=scroll.set)
+        selection_actions = ttk.Frame(picker)
+        selection_actions.grid(row=3, column=0, sticky="w")
+        select_all = ttk.Button(selection_actions, text="Select all shown", command=self.select_subscriptions)
+        select_all.pack(side="left", padx=(0, 8))
+        clear = ttk.Button(selection_actions, text="Clear selections", command=self.clear_subscriptions)
+        clear.pack(side="left")
+        self.subscription_count = ttk.Label(selection_actions, text="0 selected")
+        self.subscription_count.pack(side="left", padx=12)
+        self.context_controls.extend([search, self.subscription_list, select_all, clear])
+        self.subscription_filter.trace_add("write", self.filter_subscriptions)
+        self.subscription_list.bind("<<ListboxSelect>>", self.subscription_selection_changed)
         self.values["tenantId"].trace_add("write", self.invalidate_context)
-        for key in ("subscription", "azureTerm", "lookback"):
+        for key in ("azureTerm", "lookback"):
             self.values[key].trace_add("write", self.invalidate_result)
         for column, (label, action) in enumerate([
             ("Sign in / switch tenant", self.sign_in),
@@ -193,7 +220,7 @@ class AdvisorWindow:
             self.context_controls.append(button)
         ttk.Label(
             self.azure_frame, wraplength=750,
-            text="Tenant switching clears previous results. Select a subscription after refresh. "
+            text="Tenant switching clears previous results. Select subscriptions after refresh. "
                  "Sign-in opens your browser; Azure CLI must be installed. Disconnect clears app context, not the CLI account cache.",
         ).grid(row=5, column=0, columnspan=3, sticky="w")
         self.offline_frame = ttk.LabelFrame(frame, text="Optional offline CSV modeling", padding=8)
@@ -253,7 +280,7 @@ class AdvisorWindow:
             "Select Sign in / switch tenant to open Entra sign-in.\n"
             "For tenant switching, select or enter your approved tenant GUID first.\n"
             "Use Refresh context if you already signed in with Azure CLI.\n"
-            "Select an accessible subscription, term, and lookback, then Analyze.\n\n"
+            "Select one or more accessible subscriptions, term, and lookback, then Run report.\n\n"
             "The app reads Azure Advisor Cost recommendations and Azure Cost Management "
             "Savings Plan hourly commitment recommendations for existing usage.\n"
             "It never purchases a Savings Plan or changes Azure resources.\n\n"
@@ -275,8 +302,49 @@ class AdvisorWindow:
     def invalidate_context(self, *_args: Any) -> None:
         self.azure.clear()
         self.subscription_ids = {}
-        self.values["subscription"].set("")
-        self.subscription_combo.configure(values=())
+        self.selected_subscription_ids.clear()
+        self.filter_subscriptions()
+        self.invalidate_result()
+
+    def filter_subscriptions(self, *_args: Any) -> None:
+        query = self.subscription_filter.get().strip().lower()
+        self.visible_subscriptions = [
+            label for label in self.subscription_ids if query in label.lower()
+        ]
+        self.subscription_list.delete(0, "end")
+        for index, label in enumerate(self.visible_subscriptions):
+            self.subscription_list.insert("end", label)
+            if self.subscription_ids[label] in self.selected_subscription_ids:
+                self.subscription_list.selection_set(index)
+        self.subscription_count.configure(
+            text=f"{len(self.selected_subscription_ids)} selected | {len(self.visible_subscriptions)} shown"
+        )
+
+    def subscription_selection_changed(self, _event: Any = None) -> None:
+        if self.busy:
+            return
+        previous = set(self.selected_subscription_ids)
+        visible_ids = {self.subscription_ids[label] for label in self.visible_subscriptions}
+        selected = {
+            self.subscription_ids[self.visible_subscriptions[index]]
+            for index in self.subscription_list.curselection()
+        }
+        self.selected_subscription_ids.difference_update(visible_ids)
+        self.selected_subscription_ids.update(selected)
+        self.subscription_count.configure(
+            text=f"{len(self.selected_subscription_ids)} selected | {len(self.visible_subscriptions)} shown"
+        )
+        if previous != self.selected_subscription_ids:
+            self.invalidate_result()
+
+    def select_subscriptions(self) -> None:
+        self.subscription_list.selection_set(0, "end")
+        self.subscription_selection_changed()
+
+    def clear_subscriptions(self) -> None:
+        self.selected_subscription_ids.clear()
+        self.subscription_list.selection_clear(0, "end")
+        self.filter_subscriptions()
         self.invalidate_result()
 
     def change_mode(self, _event: Any = None) -> None:
@@ -352,10 +420,11 @@ class AdvisorWindow:
             f"{item['name']} ({item['subscriptionId']})": item["subscriptionId"]
             for item in context["subscriptions"]
         }
-        self.subscription_combo.configure(values=list(self.subscription_ids))
+        self.subscription_filter.set("")
+        self.filter_subscriptions()
         self.set_output(
             f"Context refreshed: {len(self.subscription_ids)} enabled subscriptions available. "
-            "Select a subscription explicitly, then Analyze."
+            "Select one or more subscriptions explicitly, then Run report."
             if self.subscription_ids else
             "No enabled subscriptions are accessible in this tenant. Check account membership and RBAC."
         )
@@ -396,15 +465,15 @@ class AdvisorWindow:
             return
         if self.values["mode"].get() == "connected":
             tenant = self.values["tenantId"].get().strip()
-            subscription = self.subscription_ids.get(self.values["subscription"].get())
-            if not subscription:
+            subscriptions = sorted(self.selected_subscription_ids)
+            if not subscriptions:
                 self.invalidate_result()
-                messagebox.showerror("Azure context required", "Refresh context and select an accessible subscription.", parent=self.root)
+                messagebox.showerror("Azure context required", "Refresh context and select one or more accessible subscriptions.", parent=self.root)
                 return
             term = self.values["azureTerm"].get()
             lookback = self.values["lookback"].get()
             self.run_task(
-                lambda: self.azure.analyze(tenant, subscription, term, lookback),
+                lambda: self.azure.analyze_many(tenant, subscriptions, term, lookback),
                 self.show_result, "Reading Azure Advisor and Savings Plan recommendations...",
             )
             return

@@ -18,13 +18,14 @@ NAVY = "#142d43"
 PALE = "#eef8fc"
 BLUE = "#2864e8"
 REPORT_FIELDS = (
-    "recordType", "label", "reference", "source", "currency", "term",
+    "recordType", "label", "reference", "source", "subscriptionId", "subscriptionName", "currency", "term",
     "hourlyCommitment", "baselineCost", "modeledCost", "savingsAmount",
     "savingsPercent", "coveragePercent", "utilizationPercent", "observationHours",
     "unusedCommitment", "overageCost", "remainingPaygCost", "projectedTermSavings",
     "impact", "notes",
 )
 FIELD_LABELS = {
+    "subscriptionId": "Subscription ID", "subscriptionName": "Subscription name",
     "recordType": "Record type", "label": "Recommendation / option", "reference": "Evidence reference",
     "source": "Source", "currency": "Currency", "term": "Term",
     "hourlyCommitment": "Hourly commitment", "baselineCost": "Baseline cost (observation period)",
@@ -104,13 +105,14 @@ def build_report(result: dict[str, Any]) -> SavingsReport:
     coverage: list[str] = []
     if connected:
         for key, value in sorted(result.get("context", {}).items()):
-            context.append(f"{key}: {clean_text(value)}")
+            context.append(f"{key}: {clean_text(', '.join(value) if isinstance(value, list) else value)}")
         for key, value in sorted(result.get("filters", {}).items()):
             context.append(f"{key}: {clean_text(value)}")
         for key, item in sorted(result["coverage"].items()):
             coverage.append(
                 f"{key}: {clean_text(item['status'])} | {clean_text(item.get('source'))}"
                 f" | API {clean_text(item.get('apiVersion'))} | {clean_text(item.get('message', ''))}"
+                + (f" | Subscription: {clean_text(item['subscriptionName'])}" if item.get("subscriptionName") else "")
             )
         for recommendation in result["recommendations"]:
             details = recommendation.get("recommendationDetails", {})
@@ -118,6 +120,8 @@ def build_report(result: dict[str, Any]) -> SavingsReport:
                 "recordType": "savingsPlan", "label": "Azure Savings Plan recommendation",
                 "reference": recommendation.get("recommendationReference"),
                 "source": "Azure Cost Management Benefit Recommendations API",
+                "subscriptionId": recommendation.get("subscriptionId", result.get("context", {}).get("subscriptionId")),
+                "subscriptionName": recommendation.get("subscriptionName"),
                 "currency": recommendation.get("currencyCode"), "term": recommendation.get("term"),
                 "baselineCost": number(recommendation.get("costWithoutBenefit")),
                 "observationHours": number(recommendation.get("totalHours")),
@@ -143,6 +147,8 @@ def build_report(result: dict[str, Any]) -> SavingsReport:
                 "recordType": "advisor", "label": clean_text(item.get("problem")),
                 "reference": item.get("recommendationReference"),
                 "source": "Azure Advisor Recommendations API", "impact": item.get("impact"),
+                "subscriptionId": item.get("subscriptionId", result.get("context", {}).get("subscriptionId")),
+                "subscriptionName": item.get("subscriptionName"),
                 "notes": f"Action: {clean_text(item.get('solution'))}\n"
                          f"Azure last updated: {clean_text(item.get('lastUpdated'))}",
             })
@@ -194,7 +200,11 @@ def build_report(result: dict[str, Any]) -> SavingsReport:
     return SavingsReport(
         title="Savings plans", mode=mode,
         collected_at=clean_text(result.get("collectedAt") or datetime.now(timezone.utc).isoformat()),
-        scope="Selected subscription (Single)" if connected else "User-supplied hourly observations",
+        scope=(
+            f"{len(result['context']['subscriptionIds'])} selected subscriptions (independent Single scopes)"
+            if connected and "subscriptionIds" in result.get("context", {})
+            else "Selected subscription (Single)" if connected else "User-supplied hourly observations"
+        ),
         context=tuple(context), coverage=tuple(coverage), notices=tuple(dict.fromkeys(notices)),
         records=tuple(records), metrics=metrics,
     )
@@ -209,6 +219,32 @@ def chart_records(report: SavingsReport) -> list[dict[str, Any]]:
         record for record in report.records
         if record["recordType"] in ("savingsPlan", "model") and record.get("savingsPercent") is not None
     ]
+
+
+def report_charts(report: SavingsReport) -> list[tuple[str, str, str, list[dict[str, Any]]]]:
+    charts = []
+    percentages = chart_records(report)
+    if percentages:
+        charts.append(("Savings percentage by recommendation / modeled option", "savingsPercent", "%", percentages))
+    currencies = sorted({
+        row["currency"] for row in report.records
+        if row["recordType"] in ("savingsPlan", "model") and row.get("currency")
+        and row.get("hourlyCommitment") is not None
+    })
+    for currency in currencies:
+        rows = [
+            row for row in report.records
+            if row["recordType"] in ("savingsPlan", "model") and row.get("currency") == currency
+            and row.get("hourlyCommitment") is not None
+        ]
+        charts.append((f"Hourly commitment by recommendation / modeled option ({currency}/hour)",
+                       "hourlyCommitment", f" {currency}/h", rows))
+    return charts
+
+
+def chart_label(record: dict[str, Any]) -> str:
+    scope = record.get("subscriptionName") or record.get("subscriptionId") or ""
+    return clean_text(f"{scope} | {record.get('term', '')} | {record['label']}")
 
 
 def csv_cell(value: Any) -> Any:
@@ -259,21 +295,22 @@ def export_pdf(report: SavingsReport, path: Path) -> None:
         ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor(TEAL)),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
     ]))
-    story.extend([cards, Spacer(1, 12), paragraph("Savings percentage by recommendation / modeled option", "Heading2")])
-    chart = chart_records(report)
-    if chart:
+    story.extend([cards, Spacer(1, 12)])
+    charts = report_charts(report)
+    for title, field, unit, chart in charts:
+        story.append(paragraph(title, "Heading2"))
         drawing = Drawing(540, 175)
-        maximum = max(max(abs(row["savingsPercent"]) for row in chart), 1)
+        maximum = max(max(abs(row[field]) for row in chart), .01)
         for index, row in enumerate(chart[:5]):
             y = 150 - index * 28
-            drawing.add(String(0, y, clean_text(f"{row.get('term', '')} {row['label']}")[:38], fontSize=8))
+            drawing.add(String(0, y, chart_label(row)[:44], fontSize=8))
             drawing.add(Rect(225, y - 2, 260, 10, fillColor=colors.HexColor("#e4eaf2"), strokeColor=None))
-            drawing.add(Rect(225, y - 2, 260 * abs(row["savingsPercent"]) / maximum, 10,
-                             fillColor=colors.HexColor(BLUE if row["savingsPercent"] >= 0 else "#b54343"), strokeColor=None))
-            drawing.add(String(495, y, f"{row['savingsPercent']:.2f}%", fontSize=8))
-        story.extend([drawing, paragraph(f"Showing {min(5, len(chart))} of {len(chart)} returned percentages; alternatives excluded. Full records follow.")])
-    else:
-        story.append(paragraph("No returned savings percentages to chart. Review source coverage."))
+            drawing.add(Rect(225, y - 2, 260 * abs(row[field]) / maximum, 10,
+                             fillColor=colors.HexColor(BLUE if row[field] >= 0 else "#b54343"), strokeColor=None))
+            drawing.add(String(490, y, f"{row[field]:.2f}{unit}", fontSize=7))
+        story.extend([drawing, paragraph(f"Showing {min(5, len(chart))} of {len(chart)} values; alternatives excluded. Each chart has its own scale. Full records follow.")])
+    if not charts:
+        story.append(paragraph("No returned numeric values to chart. Review source coverage."))
     story.append(paragraph("Scope, sources and limitations", "Heading2"))
     for text in (*report.context, *report.coverage, *report.notices):
         story.append(paragraph(text))
@@ -364,29 +401,28 @@ def export_powerpoint(report: SavingsReport, path: Path) -> None:
     note.word_wrap = True
     note.text = "Financial amounts and alternatives are not summed across records or currencies. Review source coverage, evidence and assumptions before decisions."
     note.paragraphs[0].font.size = Pt(15)
-    chart = chart_records(report)
-    if chart:
-        page = slide("Savings percentage by recommendation / modeled option", [])
-        maximum = max(max(abs(row["savingsPercent"]) for row in chart), 1)
+    for title, field, unit, chart in report_charts(report):
+        page = slide(title, [])
+        maximum = max(max(abs(row[field]) for row in chart), .01)
         for index, row in enumerate(chart[:5]):
             y = 1.5 + index * .85
             label = page.shapes.add_textbox(Inches(.6), Inches(y), Inches(4), Inches(.6)).text_frame
             label.word_wrap = True
-            label.text = clean_text(f"{row.get('term', '')} {row['label']}")[:65]
+            label.text = chart_label(row)[:65]
             label.paragraphs[0].font.size = Pt(13)
             for length, color in [
                 (6.5, "#e4eaf2"),
-                (max(.01, 6.5 * abs(row["savingsPercent"]) / maximum), BLUE if row["savingsPercent"] >= 0 else "#b54343"),
+                (max(.001, 6.5 * abs(row[field]) / maximum), BLUE if row[field] >= 0 else "#b54343"),
             ]:
                 bar = page.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(4.8), Inches(y + .1), Inches(length), Inches(.3))
                 bar.fill.solid()
                 bar.fill.fore_color.rgb = RGBColor.from_string(color[1:])
                 bar.line.fill.background()
             value = page.shapes.add_textbox(Inches(11.5), Inches(y), Inches(1.2), Inches(.5)).text_frame
-            value.text = f"{row['savingsPercent']:.2f}%"
+            value.text = f"{row[field]:.2f}{unit}"
             value.paragraphs[0].font.size = Pt(13)
         note = page.shapes.add_textbox(Inches(.6), Inches(6.2), Inches(12), Inches(.5)).text_frame
-        note.text = f"Showing {min(5, len(chart))} of {len(chart)} percentages; alternatives excluded. All records follow."
+        note.text = f"Showing {min(5, len(chart))} of {len(chart)} values; alternatives excluded. Each chart has its own scale. All records follow."
         note.paragraphs[0].font.size = Pt(12)
     pages("Scope, sources and limitations", [*report.context, *report.coverage, *report.notices])
     for record in report.records:

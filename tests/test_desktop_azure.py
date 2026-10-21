@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 import requests
 
-from api import azure_provider, desktop_azure
+from api import azure_provider, desktop_azure, desktop_identity
 from api.azure_provider import ConnectedProviderError, arm_list
 from api.desktop_azure import DesktopAzure
 
@@ -35,7 +35,7 @@ class Credential:
 def client(monkeypatch):
     client = DesktopAzure()
     monkeypatch.setattr(client, "current_tenant", lambda: TENANT)
-    monkeypatch.setattr(desktop_azure, "AzureCliCredential", Credential)
+    monkeypatch.setattr(desktop_azure, "SilentAzureCliCredential", Credential)
 
     def listing(url, token, params, source):
         assert token == TOKEN
@@ -123,15 +123,87 @@ def test_empty_sources_stay_empty(client, monkeypatch):
     assert {item["status"] for item in result["coverage"].values()} == {"empty"}
 
 
+def test_multiple_subscriptions_keep_results_and_coverage_separate(client, monkeypatch, tmp_path):
+    from api.reporting import build_report, write_report
+    from pypdf import PdfReader
+    from pptx import Presentation
+
+    def refresh(tenant):
+        client.subscriptions = [
+            {"subscriptionId": SUB, "name": "Synthetic Finance"},
+            {"subscriptionId": OTHER, "name": "Synthetic Engineering"},
+        ]
+    monkeypatch.setattr(client, "refresh", refresh)
+    original = desktop_azure.get_benefit_recommendations
+
+    def benefits(scope, *args, **kwargs):
+        if OTHER in scope:
+            raise ConnectedProviderError("Cost access denied.", status="denied")
+        return original(scope, *args, **kwargs)
+    monkeypatch.setattr(desktop_azure, "get_benefit_recommendations", benefits)
+    result = client.analyze_many(TENANT, [SUB, OTHER, SUB], "P1Y", "Last30Days")
+    assert result["context"]["subscriptionIds"] == sorted([SUB, OTHER])
+    assert result["completeness"] == "partial"
+    assert len(result["coverage"]) == 4
+    assert result["coverage"][f"{OTHER}/savingsPlan"]["status"] == "denied"
+    assert result["recommendations"][0]["subscriptionId"] == SUB
+    assert len(result["advisorRecommendations"]) == 2
+    report = build_report(result)
+    assert "2 selected subscriptions" in report.scope
+    assert {item["subscriptionId"] for item in report.records} == {SUB, OTHER}
+    assert all(item["subscriptionName"] for item in report.records)
+    for kind in ("pdf", "pptx", "csv"):
+        path = tmp_path / f"multiple.{kind}"
+        write_report(report, path, kind)
+        if kind == "pdf":
+            text = "\n".join(page.extract_text() for page in PdfReader(path).pages)
+        elif kind == "pptx":
+            text = "\n".join(
+                shape.text for slide in Presentation(path).slides for shape in slide.shapes if shape.has_text_frame
+            )
+        else:
+            text = path.read_text(encoding="utf-8-sig")
+        assert SUB in text and OTHER in text
+        assert "Synthetic Finance" in text and "Synthetic Engineering" in text
+        assert "denied" in text
+
+
+@pytest.mark.parametrize("selected", [[], [SUB, OTHER]])
+def test_invalid_batch_selection_collects_no_recommendations(client, monkeypatch, selected):
+    collect = Mock()
+    monkeypatch.setattr(client, "analyze", collect)
+    with pytest.raises(ValueError):
+        client.analyze_many(TENANT, selected, "P1Y", "Last30Days")
+    collect.assert_not_called()
+
+
+def test_one_subscription_failure_does_not_discard_successful_results(client, monkeypatch):
+    def refresh(tenant):
+        client.subscriptions = [{"subscriptionId": value, "name": "Synthetic"} for value in [SUB, OTHER]]
+    monkeypatch.setattr(client, "refresh", refresh)
+    original = client.analyze
+
+    def collect(tenant, subscription, *args):
+        if subscription == OTHER:
+            raise ConnectedProviderError("Authentication unavailable.")
+        return original(tenant, subscription, *args)
+    monkeypatch.setattr(client, "analyze", collect)
+    result = client.analyze_many(TENANT, [SUB, OTHER], "P1Y", "Last30Days")
+    assert result["completeness"] == "partial"
+    assert result["recommendations"][0]["subscriptionId"] == SUB
+    assert result["coverage"][f"{OTHER}/advisor"]["status"] == "unavailable"
+    assert result["coverage"][f"{OTHER}/savingsPlan"]["status"] == "unavailable"
+
+
 def test_cli_sign_in_is_tenant_specific_and_does_not_expose_output(monkeypatch):
     client = DesktopAzure()
-    monkeypatch.setattr(desktop_azure.shutil, "which", lambda _: "az.cmd")
+    monkeypatch.setattr(desktop_identity.shutil, "which", lambda _: "az.cmd")
     calls = []
 
     def run(args, **kwargs):
         calls.append((args, kwargs))
         return SimpleNamespace(returncode=0, stdout=json.dumps({"tenantId": TENANT, "userType": "user"}).encode())
-    monkeypatch.setattr(desktop_azure.subprocess, "run", run)
+    monkeypatch.setattr(desktop_identity.subprocess, "run", run)
     assert client.sign_in(TENANT) == TENANT
     assert calls[0][0][1:4] == ["login", "--tenant", TENANT]
     assert calls[0][1]["env"]["AZURE_CORE_LOGIN_EXPERIENCE_V2"] == "off"
@@ -141,8 +213,8 @@ def test_cli_sign_in_is_tenant_specific_and_does_not_expose_output(monkeypatch):
 
 def test_cli_service_principal_is_never_used(monkeypatch):
     client = DesktopAzure()
-    monkeypatch.setattr(desktop_azure.shutil, "which", lambda _: "az.cmd")
-    monkeypatch.setattr(desktop_azure.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
+    monkeypatch.setattr(desktop_identity.shutil, "which", lambda _: "az.cmd")
+    monkeypatch.setattr(desktop_identity.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
         returncode=0, stdout=json.dumps({"tenantId": TENANT, "userType": "servicePrincipal"}).encode(),
     ))
     with pytest.raises(ConnectedProviderError, match="interactive user"):
@@ -153,7 +225,7 @@ def test_cli_service_principal_is_never_used(monkeypatch):
 @pytest.mark.parametrize("tenant", ["invalid", TENANT + " & whoami"])
 def test_tenant_input_cannot_inject_cli_arguments(monkeypatch, tenant):
     run = Mock()
-    monkeypatch.setattr(desktop_azure.subprocess, "run", run)
+    monkeypatch.setattr(desktop_identity.subprocess, "run", run)
     with pytest.raises(ValueError, match="GUID"):
         DesktopAzure().sign_in(tenant)
     run.assert_not_called()

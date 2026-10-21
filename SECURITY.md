@@ -62,6 +62,14 @@
   selection. Switching context invalidates results and exports. The Azure CLI's
   shared credential cache is managed by Azure CLI; disconnecting the app does
   not sign out other CLI users or sessions.
+- Multi-subscription collection validates every selection against the selected
+  tenant before collecting. Each subscription retains independent Single-scope
+  recommendations and source coverage; failed collections remain explicitly
+  partial and do not erase other subscriptions' results.
+- Desktop CLI login, discovery and token retrieval use captured output,
+  disconnected standard input, timeouts and hidden Windows process startup.
+  Browser authentication and MFA are not suppressed. Token failures return
+  fixed guidance rather than CLI output; token expiry uses the CLI's UTC epoch.
 - ARM pagination stays on the same HTTPS host and collection path. Redirects,
   loops, and cross-scope continuation links are rejected before forwarding tokens.
 - The app does not send telemetry or upload CSV files. Offline CSV modes remain
