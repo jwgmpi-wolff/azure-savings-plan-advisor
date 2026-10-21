@@ -32,18 +32,31 @@ try {
     if (-not $ready) { throw 'Installed app did not open its desktop window within 30 seconds.' }
     if (-not $application.CloseMainWindow()) { throw 'Could not close installed desktop app.' }
     if (-not $application.WaitForExit(10000)) { throw 'Desktop app did not exit cleanly.' }
+    $application.Dispose()
+    $application = $null
     'Verified installed desktop app opens and closes successfully.'
 } finally {
     if ($application -and -not $application.HasExited) {
         Stop-Process -Id $application.Id -Force
     }
+    if ($application) {
+        $application.Dispose()
+        $application = $null
+    }
     $uninstaller = Join-Path $installDir 'unins000.exe'
     if (Test-Path -LiteralPath $uninstaller) {
+        $uninstallLog = "$installDir-uninstall.log"
         $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @(
-            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"$uninstallLog`""
         ) -Wait -PassThru
         if ($uninstall.ExitCode -ne 0) { throw "Uninstaller exited with code $($uninstall.ExitCode)." }
-        if (Test-Path -LiteralPath "$installDir\AzureSavingsPlanAdvisor.exe") { throw 'Uninstall did not remove the application.' }
+        # Inno Setup's temporary uninstaller helper can outlive its launcher.
+        $deadline = (Get-Date).AddSeconds(30)
+        while ((Test-Path -LiteralPath "$installDir\AzureSavingsPlanAdvisor.exe") -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 500
+        }
+        if (Test-Path -LiteralPath "$installDir\AzureSavingsPlanAdvisor.exe") { throw "Uninstall did not remove the application. See $uninstallLog." }
+        Remove-Item -LiteralPath $uninstallLog
         'Verified app uninstall.'
     }
 }
