@@ -94,6 +94,69 @@ def test_report_preserves_azure_values_and_missing_is_not_zero(connected_result)
     assert len(chart_records(report)) == 1
     assert any("denied" in line for line in report.coverage)
 
+def test_report_preserves_benefit_metadata_without_inventing_compute_or_discount(connected_result, tmp_path):
+    recommendation = connected_result["recommendations"][0]
+    recommendation.update(kind="SavingsPlan", armSkuName="Synthetic_Plan_SKU")
+    recommendation["recommendationDetails"]["benefitCost"] = 700
+    report = build_report(connected_result)
+    primary, alternative = report.records
+    assert primary["benefitType"] == alternative["benefitType"] == "SavingsPlan"
+    assert primary["benefitSku"] == alternative["benefitSku"] == "Synthetic_Plan_SKU"
+    assert primary["benefitCost"] == 700
+    assert alternative["benefitCost"] is None
+    assert primary.get("computeType") is None
+    assert primary.get("computeSku") is None
+    assert primary.get("discountPercent") is None
+    path = tmp_path / "benefits.csv"
+    export_csv(report, path)
+    rows = list(csv.DictReader(path.open(encoding="utf-8-sig", newline="")))
+    assert rows[0]["benefitSku"] == "Synthetic_Plan_SKU"
+    assert rows[0]["benefitCost"] == "700.0"
+    assert rows[0]["computeSku"] == rows[0]["discountPercent"] == ""
+
+@pytest.mark.parametrize("kind,reader", [
+    ("pdf", text_from_pdf), ("pptx", text_from_powerpoint),
+    ("csv", lambda path: path.read_text(encoding="utf-8-sig")),
+])
+def test_inventory_is_scoped_and_exported_without_inventing_benefits(connected_result, tmp_path, kind, reader):
+    resource_id = "/subscriptions/synthetic-subscription/resourceGroups/test/providers/Microsoft.Compute/virtualMachines/vm"
+    connected_result["computeInventory"] = [
+        {
+            "resourceId": resource_id, "subscriptionId": "synthetic-subscription",
+            "name": "Synthetic workload", "computeType": "Virtual machine", "computeSku": "Standard_D2s_v5",
+            "licenseType": "Windows_Server", "recommendationReference": "inventory-001",
+            "source": "Azure Resource Manager Microsoft.Compute/virtualMachines List",
+        },
+        {
+            "resourceId": "/subscriptions/other/resourceGroups/test/providers/Microsoft.Web/serverfarms/plan",
+            "subscriptionId": "other", "name": "Other subscription workload",
+            "computeType": "App Service plan", "computeSku": "P1v3",
+        },
+    ]
+    connected_result["advisorRecommendations"] = [
+        {"resourceId": resource_id.upper(), "problem": "Review synthetic workload"},
+        {"resourceId": resource_id + "-other", "problem": "Unmatched action"},
+    ]
+    report = build_report(connected_result)
+    plan, alternative, matched, unmatched, vm, app = report.records
+    assert vm["computeSku"] == "Standard_D2s_v5"
+    assert vm["licenseType"] == "Windows_Server"
+    assert vm.get("savingsAmount") is None
+    assert vm.get("discountPercent") is None
+    assert plan.get("computeSku") is None
+    assert "Standard_D2s_v5" in plan["computeInventory"]
+    assert plan["computeInventory"] == alternative["computeInventory"]
+    assert "P1v3" not in plan["computeInventory"]
+    assert matched["computeSku"] == "Standard_D2s_v5"
+    assert unmatched["computeSku"] is None
+    assert app["subscriptionId"] == "other"
+    assert len(chart_records(report)) == 1
+    path = tmp_path / f"inventory.{kind}"
+    write_report(report, path, kind)
+    text = reader(path)
+    for expected in ("Standard_D2s_v5", "Windows_Server", "P1v3", "inventory-001", "not attributed"):
+        assert expected in text
+
 
 @pytest.mark.parametrize("kind,exporter,reader", [
     ("pdf", export_pdf, text_from_pdf), ("pptx", export_powerpoint, text_from_powerpoint),

@@ -23,7 +23,7 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: |
-          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '0.6.0' }
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '0.7.0' }
           .\scripts\Build-WindowsInstaller.ps1 -Version $version
       - name: Verify install, application launch, and uninstall
         shell: pwsh

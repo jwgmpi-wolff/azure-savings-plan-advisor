@@ -47,6 +47,8 @@ def client(monkeypatch):
                 {"tenantId": OTHER, "subscriptionId": OTHER, "state": "Enabled"},
                 {"tenantId": TENANT, "subscriptionId": OTHER, "state": "Disabled"},
             ]
+        if any(url.endswith("/" + resource_type) for _key, resource_type, _version, _label in desktop_azure.COMPUTE_SOURCES):
+            return []
         return [{
             "id": "/synthetic/recommendation", "properties": {
                 "category": "Cost", "impact": "High",
@@ -144,7 +146,7 @@ def test_multiple_subscriptions_keep_results_and_coverage_separate(client, monke
     result = client.analyze_many(TENANT, [SUB, OTHER, SUB], "P1Y", "Last30Days")
     assert result["context"]["subscriptionIds"] == sorted([SUB, OTHER])
     assert result["completeness"] == "partial"
-    assert len(result["coverage"]) == 4
+    assert len(result["coverage"]) == 10
     assert result["coverage"][f"{OTHER}/savingsPlan"]["status"] == "denied"
     assert result["recommendations"][0]["subscriptionId"] == SUB
     assert len(result["advisorRecommendations"]) == 2
@@ -175,6 +177,85 @@ def test_invalid_batch_selection_collects_no_recommendations(client, monkeypatch
     with pytest.raises(ValueError):
         client.analyze_many(TENANT, selected, "P1Y", "Last30Days")
     collect.assert_not_called()
+
+def test_compute_collection_uses_delegated_scope_and_safe_fields(client, monkeypatch):
+    original = desktop_azure.arm_list
+    calls = []
+
+    def listing(url, token, params, source):
+        for key, resource_type, version, _label in desktop_azure.COMPUTE_SOURCES:
+            if url.endswith("/" + resource_type):
+                calls.append((url, token, params))
+                assert url.startswith(f"https://management.azure.com/subscriptions/{SUB}/providers/")
+                assert params == {"api-version": version}
+                assert token == TOKEN
+                return [{
+                    "id": f"/subscriptions/{SUB}/resourceGroups/synthetic/providers/{resource_type}/synthetic-{key}",
+                    "type": resource_type, "name": f"synthetic-{key}",
+                    "sku": {"name": "P1v3" if key == "appServicePlans" else "Standard_D4s_v5"},
+                    "properties": {
+                        "hardwareProfile": {"vmSize": "Standard_D2s_v5"},
+                        "licenseType": "Windows_Server",
+                        "virtualMachineProfile": {"licenseType": "RHEL_BYOS"},
+                        "osProfile": {"adminPassword": "synthetic-private-password"},
+                        "customData": "must not be forwarded",
+                    },
+                }]
+        return original(url, token, params, source)
+    monkeypatch.setattr(desktop_azure, "arm_list", listing)
+    result = client.analyze_many(TENANT, [SUB], "P1Y", "Last30Days")
+    assert len(calls) == 3
+    inventory = result["computeInventory"]
+    assert len(inventory) == 3
+    assert [entry["computeSku"] for entry in inventory] == ["Standard_D2s_v5", "Standard_D4s_v5", "P1v3"]
+    assert inventory[1]["licenseType"] == "RHEL_BYOS"
+    assert all(entry["subscriptionId"] == SUB for entry in inventory)
+    assert all(entry["subscriptionName"] == "Test subscription" for entry in inventory)
+    assert all(entry["recommendationReference"] for entry in inventory)
+    text = json.dumps(result)
+    assert "synthetic-private-password" not in text
+    assert "customData" not in text
+    assert result["completeness"] == "complete"
+
+
+@pytest.mark.parametrize("status", ["denied", "unavailable", "unsupported"])
+def test_compute_failure_keeps_recommendations_and_other_inventory(client, monkeypatch, status):
+    original = desktop_azure.arm_list
+
+    def listing(url, *args):
+        if url.endswith("/Microsoft.Compute/virtualMachines"):
+            raise ConnectedProviderError("Inventory read failed. Request Reader access.", status=status)
+        return original(url, *args)
+    monkeypatch.setattr(desktop_azure, "arm_list", listing)
+    result = client.analyze(TENANT, SUB, "P1Y", "Last30Days")
+    assert result["completeness"] == "partial"
+    assert result["coverage"]["virtualMachines"]["status"] == status
+    assert result["coverage"]["appServicePlans"]["status"] == "empty"
+    assert result["recommendations"]
+    assert result["computeInventory"] == []
+
+
+@pytest.mark.parametrize("change", [
+    {"id": f"/subscriptions/{OTHER}/resourceGroups/test/providers/Microsoft.Compute/virtualMachines/vm"},
+    {"type": "Microsoft.Web/sites"},
+    {"properties": None},
+])
+def test_invalid_inventory_is_partial_not_clean(client, monkeypatch, change):
+    original = desktop_azure.arm_list
+
+    def listing(url, *args):
+        if url.endswith("/Microsoft.Compute/virtualMachines"):
+            return [{
+                "id": f"/subscriptions/{SUB}/resourceGroups/test/providers/Microsoft.Compute/virtualMachines/vm",
+                "type": "Microsoft.Compute/virtualMachines", "properties": {}, **change,
+            }]
+        return original(url, *args)
+    monkeypatch.setattr(desktop_azure, "arm_list", listing)
+    result = client.analyze(TENANT, SUB, "P1Y", "Last30Days")
+    assert result["completeness"] == "partial"
+    assert result["coverage"]["virtualMachines"]["status"] == "unavailable"
+    assert "malformed or out-of-scope" in result["coverage"]["virtualMachines"]["message"]
+    assert result["computeInventory"] == []
 
 
 def test_one_subscription_failure_does_not_discard_successful_results(client, monkeypatch):

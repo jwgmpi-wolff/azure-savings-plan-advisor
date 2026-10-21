@@ -66,6 +66,105 @@ def test_desktop_requires_explicit_assumptions(field):
     with pytest.raises(ValueError, match=field):
         analyze_csv_file(SAMPLE, request)
 
+@pytest.mark.parametrize("mode", ["what-if", "comparison", "modeler", "connected"])
+def test_row_details_click_keyboard_and_invalidation(tk_root, mode):
+    from tkinter.scrolledtext import ScrolledText
+    from api.reporting import build_report
+    from api.compute_modeler import calculate_compute_model
+    from report_view import ReportView
+
+    if mode == "connected":
+        result = {
+            "mode": "connected", "collectedAt": "2026-01-01T00:00:00Z",
+            "coverage": {"advisor": {"status": "denied"}}, "advisorRecommendations": [],
+            "recommendations": [{
+                "kind": "SavingsPlan", "armSkuName": "Synthetic_Plan_SKU",
+                "recommendationReference": "synthetic-evidence", "currencyCode": "USD",
+                "recommendationDetails": {"benefitCost": 17, "savingsPercentage": 12},
+                "alternatives": [{"benefitCost": 9, "savingsPercentage": 8}],
+            }],
+            "computeInventory": [{
+                "name": "synthetic-vm", "computeType": "Virtual machine", "computeSku": "Standard_D2s_v5",
+                "source": "Azure Resource Manager", "recommendationReference": "synthetic-inventory",
+            }],
+        }
+    elif mode == "modeler":
+        result = calculate_compute_model(
+            period_hours=100, compute_hours=90, payg_rate=10, discount_percent=20,
+            hourly_commitment=8, currency_code="USD", term="P1Y",
+        )
+    else:
+        result = analyze_csv_file(SAMPLE, assumptions(mode))
+    view = ReportView(tk_root)
+    view.pack(fill="both", expand=True)
+    view.show(build_report(result))
+    tk_root.geometry("1000x850")
+    tk_root.deiconify()
+    tk_root.update()
+    assert view.table.bind("<ButtonRelease-1>")
+    assert view.table.bind("<Return>")
+    view.table.event_generate("<ButtonRelease-1>", x=20, y=5)
+    assert view.details_window is None
+    bounds = view.table.bbox("0")
+    assert bounds
+    x, y, _, height = bounds
+    view.table.event_generate("<ButtonRelease-1>", x=x + 10, y=y + height // 2)
+    popup = view.details_window
+    assert popup is not None
+
+    def popup_text():
+        frame = view.details_window.winfo_children()[0]
+        widget = next(
+            widget for child in frame.winfo_children() for widget in child.winfo_children()
+            if isinstance(widget, ScrolledText)
+        )
+        assert str(widget["state"]) == "disabled"
+        return widget.get("1.0", "end")
+
+    text = popup_text()
+    assert "Compute type: Not supplied" in text
+    assert "Compute SKU: Not supplied" in text
+    assert "SOURCE COVERAGE" in text
+    assert "per-SKU discount" in text
+    if mode == "connected":
+        assert "Synthetic_Plan_SKU" in text and "synthetic-evidence" in text
+        assert "Benefit cost (report period): 17.00" in text
+        assert "Assumed discount (%): Not supplied" in text
+        assert "denied" in text
+        assert "Standard_D2s_v5" in text and "not attributed benefit coverage" in text
+    elif mode == "modeler":
+        assert "Assumed discount (%): 20.00" in text
+    elif mode == "what-if":
+        assert "User-supplied modeled discount" in text
+        assert "Assumed discount (%): 20.00" in text
+    else:
+        assert "No Commitment" in text
+    view.table.focus("1" if mode == "connected" else view.table.get_children()[-1])
+    view.table.focus_force()
+    tk_root.update()
+    view.table.event_generate("<Return>")
+    assert not popup.winfo_exists()
+    assert view.details_window is not None
+    if mode == "modeler":
+        assert "Assumed discount (%): 20.00" in popup_text()
+    if mode == "connected":
+        assert "Benefit cost (report period): 9.00" in popup_text()
+        view.show_row_details("2")
+        assert "Compute SKU: Standard_D2s_v5" in popup_text()
+        assert "Compute type: Virtual machine" in popup_text()
+        assert "Savings (%): Not supplied" in popup_text()
+    view.details_window.focus_force()
+    tk_root.update()
+    view.details_window.event_generate("<Escape>")
+    assert view.details_window is None
+    view.show_row_details("0")
+    popup = view.details_window
+    view.clear()
+    assert not popup.winfo_exists()
+    assert view.details_window is None
+    view.show_row_details("0")
+    assert view.details_window is None
+
 
 @pytest.mark.parametrize("invalid", [float("nan"), float("inf"), -101])
 def test_desktop_rejects_invalid_usage_change(invalid):

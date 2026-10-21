@@ -19,6 +19,10 @@ sharing or deploying:
       Connected desktop analysis must work without a CSV. Explain that CLI
       credentials are shared with the user's CLI and Disconnect only clears app
       context. The desktop does not require a separately deployed Function.
+- [ ] Verify read access for VM, VM scale set and App Service plan inventory.
+      Distinguish current configured SKU/license evidence from historical usage,
+      benefit eligibility, entitlement and actual discount/coverage. Plan-level
+      inventory is context only; Advisor enrichment requires an exact resource ID.
 - [ ] Test the released Windows installer and checksum, including application
       launch/uninstall under an isolated test user. Disclose that it is unsigned.
 - [ ] Configure the customer's Entra app registration, OAuth scope, delegated

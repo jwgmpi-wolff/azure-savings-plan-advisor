@@ -167,6 +167,7 @@ def _calculate_option(
         "term": term,
         "scenario": scenario,
         "currencyCode": currency_code,
+        "discountPercent": _round(discount_percent),
         "dataHours": len(projected),
         "hourlyCommitment": _round(hourly_commitment),
         "hourlyPaygCoverageCapacity": _round(payg_coverage_capacity),

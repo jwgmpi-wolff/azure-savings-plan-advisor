@@ -25,9 +25,16 @@ REPORT_FIELDS = (
     "computeHours", "periodHours", "paygRate", "discountPercent", "commitmentCost",
     "breakEvenHours", "breakEvenRuntimePercent", "runtimeMarginHours",
     "projectedTermBaselineCost", "projectedTermModeledCost",
+    "computeType", "computeSku", "benefitType", "benefitSku", "benefitCost",
+    "licenseType", "computeInventory",
     "impact", "notes",
 )
 FIELD_LABELS = {
+    "computeType": "Compute type", "computeSku": "Compute SKU",
+    "benefitType": "Benefit type", "benefitSku": "Benefit / plan SKU (not workload SKU)",
+    "benefitCost": "Benefit cost (report period)",
+    "licenseType": "Reported license type (not verified benefit savings)",
+    "computeInventory": "Current subscription compute inventory (not attributed benefit coverage)",
     "computeHours": "Compute running hours", "periodHours": "Elapsed period hours",
     "paygRate": "Assumed PAYG rate per running hour", "discountPercent": "Assumed discount (%)",
     "commitmentCost": "Commitment cost (whole period)", "breakEvenHours": "Break-even running hours",
@@ -132,6 +139,8 @@ def build_report(result: dict[str, Any]) -> SavingsReport:
                 "subscriptionId": recommendation.get("subscriptionId", result.get("context", {}).get("subscriptionId")),
                 "subscriptionName": recommendation.get("subscriptionName"),
                 "currency": recommendation.get("currencyCode"), "term": recommendation.get("term"),
+                "benefitType": recommendation.get("kind"),
+                "benefitSku": recommendation.get("armSkuName"),
                 "baselineCost": number(recommendation.get("costWithoutBenefit")),
                 "observationHours": number(recommendation.get("totalHours")),
                 "notes": f"Granularity: {recommendation.get('commitmentGranularity', 'Hourly')}. "
@@ -150,22 +159,61 @@ def build_report(result: dict[str, Any]) -> SavingsReport:
                     "utilizationPercent": number(detail.get("averageUtilizationPercentage")),
                     "unusedCommitment": number(detail.get("wastageCost")),
                     "overageCost": number(detail.get("overageCost")),
+                    "benefitCost": number(detail.get("benefitCost")),
                 })
         for item in result["advisorRecommendations"]:
+            resource_id = item.get("resourceId")
+            resource = next((
+                entry for entry in result.get("computeInventory", [])
+                if isinstance(resource_id, str) and entry.get("resourceId", "").lower() == resource_id.lower()
+                and entry.get("subscriptionId", result.get("context", {}).get("subscriptionId"))
+                == item.get("subscriptionId", result.get("context", {}).get("subscriptionId"))
+            ), {})
             records.append({
                 "recordType": "advisor", "label": clean_text(item.get("problem")),
                 "reference": item.get("recommendationReference"),
                 "source": "Azure Advisor Recommendations API", "impact": item.get("impact"),
                 "subscriptionId": item.get("subscriptionId", result.get("context", {}).get("subscriptionId")),
                 "subscriptionName": item.get("subscriptionName"),
+                "computeType": resource.get("computeType"), "computeSku": resource.get("computeSku"),
+                "licenseType": resource.get("licenseType"),
                 "notes": f"Action: {clean_text(item.get('solution'))}\n"
                          f"Azure last updated: {clean_text(item.get('lastUpdated'))}",
             })
+        for entry in result.get("computeInventory", []):
+            records.append({
+                "recordType": "computeInventory", "label": entry.get("name"),
+                "reference": entry.get("recommendationReference"), "source": entry.get("source"),
+                "subscriptionId": entry.get("subscriptionId", result.get("context", {}).get("subscriptionId")),
+                "subscriptionName": entry.get("subscriptionName"),
+                "computeType": entry.get("computeType"), "computeSku": entry.get("computeSku"),
+                "licenseType": entry.get("licenseType"),
+                "notes": "Current configured inventory, not usage during the recommendation lookback. "
+                         "No per-resource discount, Savings Plan eligibility, benefit coverage or savings is inferred. "
+                         "A reported license type is configuration evidence only; validate entitlement separately. "
+                         "Inventory covers VMs, VM scale sets and App Service plans; other compute services are not collected.",
+            })
+        for record in records:
+            if record["recordType"] in ("savingsPlan", "alternative"):
+                inventory = [
+                    entry for entry in records if entry["recordType"] == "computeInventory"
+                    and entry.get("subscriptionId") == record.get("subscriptionId")
+                ]
+                record["computeInventory"] = "\n".join(
+                    f"{display(entry.get('label'))} | {display(entry.get('computeType'))} | "
+                    f"SKU: {display(entry.get('computeSku'))} | License: {display(entry.get('licenseType'))} | "
+                    f"Evidence: {display(entry.get('reference'))}"
+                    for entry in inventory
+                ) or "No inventory records returned. Check source coverage; this does not establish absence of compute."
         notices.extend([
             "Advisor Cost actions are not all Savings Plans. Do not add Advisor and benefit savings together.",
             "Alternatives are mutually exclusive choices, not additive recommendations.",
             "No commitment or savings is inferred when Azure omits a value. Check partial coverage before decisions.",
             "Azure recommendations are cached and may lag workload changes. Review in Azure before purchase.",
+            "Compute inventory is current configuration, not attributed benefit coverage, historical usage or verified savings. "
+            "VMs, VM scale sets and App Service plans are collected read-only when permitted. "
+            "A subscription-level plan cannot be attributed to a resource SKU or per-SKU discount. "
+            "Advisor compute details are matched only by exact resource ID.",
         ])
     elif mode == "modeler":
         context.extend([
@@ -195,6 +243,7 @@ def build_report(result: dict[str, Any]) -> SavingsReport:
                 "recordType": "sensitivity", "label": f"{point['computeHours']:g} running hours",
                 "source": result["source"], "currency": result["currencyCode"], "term": result["term"],
                 **point, "hourlyCommitment": result["hourlyCommitment"],
+                "paygRate": number(result["paygRate"]), "discountPercent": number(result["discountPercent"]),
                 "periodHours": result["periodHours"], "observationHours": result["periodHours"],
                 "notes": "Independent runtime scenario, not additive. Same rates, discount and elapsed commitment period.",
             })
@@ -209,6 +258,7 @@ def build_report(result: dict[str, Any]) -> SavingsReport:
                 "label": option.get("name", f"{option['term']} / {option.get('scenario', '')}"),
                 "source": "Local deterministic planning model", "currency": option["currencyCode"],
                 "term": option["term"], "hourlyCommitment": number(option.get("hourlyCommitment")),
+                "discountPercent": number(option.get("discountPercent")),
                 "baselineCost": number(option.get("scenarioEligibleCostObserved")),
                 "modeledCost": number(option["modeledCostObserved"]),
                 "savingsAmount": number(option["netSavingsObserved"]),

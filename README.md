@@ -1,6 +1,6 @@
 # Azure Savings Plan Advisor
 
-**Windows app:** [Get the Windows x64 app installer from this repository](downloads/windows/AzureSavingsPlanAdvisor-0.6.0-Setup-x64.exe).
+**Windows app:** [Get the Windows x64 app installer from this repository](downloads/windows/AzureSavingsPlanAdvisor-0.7.0-Setup-x64.exe).
 Open the file and select **Download raw file** on GitHub, or run it from your
 local clone. [Verify its SHA-256 checksum](downloads/windows/SHA256SUMS.txt).
 For API development, see [prerequisite installers](#windows-installers)
@@ -17,7 +17,7 @@ User -> Copilot Studio -> Entra-authenticated REST API -> Azure Function
 
 ## Install the Windows app
 
-1. Open [the installer checked into this repository](downloads/windows/AzureSavingsPlanAdvisor-0.6.0-Setup-x64.exe)
+1. Open [the installer checked into this repository](downloads/windows/AzureSavingsPlanAdvisor-0.7.0-Setup-x64.exe)
    and select **Download raw file**, or use the copy under `downloads\windows`
    in your local clone. The same installer is also available in
    [the repository downloads folder](downloads/windows).
@@ -63,6 +63,19 @@ The screen, PDF, PowerPoint (`.pptx`) and CSV use the same normalized report:
   term, currency, hourly commitment, savings amount/percentage, coverage and
   utilization. Source coverage is shown separately for each selected subscription.
   A failed subscription does not discard successful results from the others.
+- Click any results row (or focus a row and press Enter) to open a scrollable
+  details popup with benefit/plan SKU, benefit cost, savings, discount assumptions,
+  financial details, collection time, evidence reference and source coverage.
+  Escape or Close dismisses it. Changing report context closes stale details.
+  Connected reports also collect current VM, VM scale set and App Service plan
+  inventory using the same delegated user and selected subscriptions. Inventory
+  rows show compute type, configured SKU and reported license type; plan popups
+  show same-subscription inventory as context, **not attributed benefit coverage**.
+  Advisor rows show compute details only on an exact resource-ID match.
+  Unsupported compute services, offline inputs and missing fields remain
+  **Not supplied**. Inventory is not historical usage or proof of eligibility.
+  A returned benefit/plan SKU is not a VM SKU, and overall savings percentage
+  is not a per-SKU discount. Offline discounts remain explicitly assumed.
 - PDF and PowerPoint include the executive summary, chart when percentages are
   available, scope, collection time, source coverage/API versions, evidence
   references, details and limitations. Long reports paginate instead of dropping
@@ -106,6 +119,15 @@ The screen, PDF, PowerPoint (`.pptx`) and CSV use the same normalized report:
   Cost Management recommendations require the appropriate Cost Management read
   access, for example Cost Management Reader, subject to billing agreement and
   cost visibility settings. Role assignment does not guarantee billing eligibility.
+- Compute inventory additionally requires `Microsoft.Compute/virtualMachines/read`,
+  `Microsoft.Compute/virtualMachineScaleSets/read` and
+  `Microsoft.Web/serverfarms/read` (included in Reader). Each list has independent
+  coverage and uses paginated ARM APIs: Compute `2024-07-01` and App Service
+  `2024-11-01`. A denied, unsupported or unavailable inventory source makes
+  coverage partial without discarding recommendations or other inventory.
+  Resource names, subscription provenance and reported license settings appear
+  in reports and exports; review them before sharing. No license entitlement,
+  actual benefit assignment or resource-level rate/discount is inferred.
 - [Azure Advisor](https://learn.microsoft.com/en-us/rest/api/advisor/recommendations/list)
   provides **cached Cost recommendations** for existing workloads. Not every Cost
   action is a Savings Plan, and the app does not add Advisor savings to benefit
@@ -209,8 +231,8 @@ From the project directory:
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-windows.txt
 if ($LASTEXITCODE -ne 0) { throw 'Windows build dependency installation failed.' }
-.\scripts\Build-WindowsInstaller.ps1 -Python .\.venv\Scripts\python.exe -Version 0.6.0
-.\scripts\Test-WindowsInstaller.ps1
+.\scripts\Build-WindowsInstaller.ps1 -Python .\.venv\Scripts\python.exe -Version 0.7.0
+.\scripts\Test-WindowsInstaller.ps1 -Installer .\dist\installer\AzureSavingsPlanAdvisor-0.7.0-Setup-x64.exe
 ```
 
 The installer and checksum are written under `dist\installer`. The Windows
@@ -218,10 +240,13 @@ installer workflow also builds, tests installation/application launch/uninstall,
 and publishes these files when a version tag is pushed, when hosted runners
 are permitted. This repository's enterprise policy currently disables hosted
 runners; an enterprise administrator must enable them or provide an approved
-runner. Version 0.6.0 was built locally, with 159 passing regression tests, a verified
-bundled-app launch/close and a checked installer checksum. The install/uninstall
-smoke test was not run locally because an existing installation is protected;
-run it under a separate Windows test user.
+runner. Version 0.7.0 adds row-details popups and read-only compute inventory.
+It was built locally with 174 passing regression tests, successful bundled-app
+launch/close and a verified installer SHA-256 checksum. Live collection still
+requires validation with the intended tenant, selected subscriptions and RBAC.
+The install/uninstall smoke test requires a separate Windows test user if the
+app is already installed; it deliberately refuses to modify an existing install.
+Select the installer explicitly when several versions exist in the output folder.
 
 The build script finds Inno Setup on PATH or in its standard machine/per-user
 installation directory. Signing requires a separately provisioned code-signing

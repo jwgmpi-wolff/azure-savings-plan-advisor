@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
+from tkinter.scrolledtext import ScrolledText
 
-from api.reporting import BLUE, NAVY, PALE, TEAL, SavingsReport, chart_label, display, report_charts
+from api.reporting import BLUE, NAVY, PALE, TEAL, SavingsReport, chart_label, display, record_lines, report_charts
 
 
 def apply_theme(root: tk.Tk) -> None:
@@ -33,6 +34,7 @@ class ReportView(ttk.Frame):
     def __init__(self, parent: ttk.Frame) -> None:
         super().__init__(parent, padding=12)
         self.report: SavingsReport | None = None
+        self.details_window: tk.Toplevel | None = None
         self.heading = ttk.Label(self, text="Savings plans", font=("Segoe UI", 22, "bold"))
         self.heading.pack(anchor="w")
         self.subtitle = ttk.Label(self, text="Run a live report to view the executive dashboard.", wraplength=1050)
@@ -57,11 +59,18 @@ class ReportView(ttk.Frame):
         table_frame = ttk.Frame(self)
         table_frame.pack(fill="both", expand=True, pady=(8, 0))
         columns = ("type", "subscriptionName", "subscription", "label", "term", "currency", "commitment", "baseline",
-                   "cost", "savings", "percent", "coverage", "utilization", "runtime", "period", "breakeven", "unused")
+                   "cost", "savings", "percent", "coverage", "utilization", "runtime", "period", "breakeven", "unused",
+                   "computeType", "computeSku")
         self.table = ttk.Treeview(table_frame, columns=columns, show="headings", height=7)
+        self.table.bind("<ButtonRelease-1>", self.open_clicked_row)
+        self.table.bind("<Return>", self.open_focused_row)
+        ttk.Label(table_frame, text="Click a row for compute, benefit and discount details. Keyboard: Enter.").grid(
+            row=2, column=0, sticky="w", pady=(5, 0),
+        )
         headings = ("Record", "Subscription name", "Subscription ID", "Recommendation / option", "Term", "Currency",
                     "Hourly commitment", "PAYG baseline", "Modeled cost", "Savings amount", "Savings %", "Coverage %",
-                    "Utilization %", "Running hours", "Period hours", "Break-even hours", "Unused commitment")
+                    "Utilization %", "Running hours", "Period hours", "Break-even hours", "Unused commitment",
+                    "Compute type", "Compute SKU")
         for column, heading in zip(columns, headings):
             self.table.heading(column, text=heading)
             self.table.column(column, width=125 if column != "label" else 250, minwidth=90, stretch=True)
@@ -91,6 +100,7 @@ class ReportView(ttk.Frame):
             value.configure(wraplength=max(100, width // 4 - 30))
 
     def clear(self) -> None:
+        self.close_details()
         self.report = None
         self.subtitle.configure(text="Report cleared. Run analysis for the current context.")
         self.coverage.configure(text="")
@@ -115,7 +125,7 @@ class ReportView(ttk.Frame):
              "period", "unused", "percent", "coverage", "utilization", "term", "type")
             if report.mode == "modeler" else
             ("type", "subscriptionName", "subscription", "label", "term", "currency", "commitment",
-             "baseline", "cost", "savings", "percent", "coverage", "utilization")
+             "computeType", "computeSku", "baseline", "cost", "savings", "percent", "coverage", "utilization")
         ))
         if report.mode == "modeler":
             model = report.records[0]
@@ -132,10 +142,74 @@ class ReportView(ttk.Frame):
                 display(record.get(key)) for key in (
                     "recordType", "subscriptionName", "subscriptionId", "label", "term", "currency", "hourlyCommitment",
                     "baselineCost", "modeledCost", "savingsAmount", "savingsPercent", "coveragePercent", "utilizationPercent",
-                    "computeHours", "periodHours", "breakEvenHours", "unusedCommitment",
+                    "computeHours", "periodHours", "breakEvenHours", "unusedCommitment", "computeType", "computeSku",
                 )
             ])
         self.draw_chart()
+
+    def close_details(self) -> None:
+        if self.details_window is not None:
+            self.details_window.destroy()
+            self.details_window = None
+
+    def open_clicked_row(self, event: tk.Event) -> None:
+        if self.table.identify_region(event.x, event.y) not in ("cell", "tree"):
+            return
+        row = self.table.identify_row(event.y)
+        if row:
+            self.table.selection_set(row)
+            self.table.focus(row)
+            self.show_row_details(row)
+
+    def open_focused_row(self, _event: tk.Event) -> str:
+        row = self.table.focus()
+        if row:
+            self.show_row_details(row)
+        return "break"
+
+    def show_row_details(self, row: str) -> None:
+        if self.report is None or not self.table.exists(row):
+            return
+        record = self.report.records[int(row)]
+        self.close_details()
+        popup = tk.Toplevel(self)
+        self.details_window = popup
+        popup.title("Recommendation details")
+        popup.geometry("820x650")
+        popup.minsize(500, 350)
+        popup.transient(self.winfo_toplevel())
+        popup.protocol("WM_DELETE_WINDOW", self.close_details)
+        popup.bind("<Escape>", lambda _event: self.close_details())
+        content = ttk.Frame(popup, padding=12)
+        content.pack(fill="both", expand=True)
+        ttk.Label(content, text=display(record.get("label")), font=("Segoe UI", 14, "bold"),
+                  wraplength=740).pack(anchor="w", pady=(0, 8))
+        text = ScrolledText(content, wrap="word", font=("Segoe UI", 10), foreground=NAVY)
+        text.pack(fill="both", expand=True)
+        lines = [
+            f"Collected: {self.report.collected_at}", f"Scope: {self.report.scope}", "",
+            "COMPUTE, BENEFITS AND DISCOUNTS",
+            f"Compute type: {display(record.get('computeType'))}",
+            f"Compute SKU: {display(record.get('computeSku'))}",
+            f"Benefit type: {display(record.get('benefitType'))}",
+            f"Benefit / plan SKU (not workload SKU): {display(record.get('benefitSku'))}",
+            f"Assumed discount (%): {display(record.get('discountPercent'))}",
+            f"Savings (%): {display(record.get('savingsPercent'))}",
+            "",
+            "Connected compute inventory covers current VMs, VM scale sets and App Service plans, subject to read access. "
+            "Subscription-level plans do not identify an individual workload SKU; their related inventory is shown below "
+            "as context only, not attributed benefit coverage. Advisor details are linked only by exact resource ID. "
+            "Offline inputs do not identify compute type/SKU. A benefit/plan SKU does not identify a workload SKU. "
+            "Savings percentage is the overall estimated saving, not a per-SKU discount. "
+            "Offline discounts are user assumptions, not verified Azure pricing; CSV model assumptions are listed below.",
+            "", "FULL ROW DETAILS", *record_lines(record),
+            "", "SOURCE COVERAGE", *self.report.coverage,
+            "", "LIMITATIONS AND ASSUMPTIONS", *self.report.notices,
+        ]
+        text.insert("1.0", "\n".join(lines))
+        text.configure(state="disabled")
+        ttk.Button(content, text="Close", command=self.close_details).pack(anchor="e", pady=(8, 0))
+        text.focus_set()
 
     def draw_chart(self) -> None:
         self.chart.delete("all")

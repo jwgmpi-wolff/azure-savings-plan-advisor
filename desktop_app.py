@@ -106,6 +106,19 @@ def format_result(result: dict[str, Any]) -> str:
                 f"  Action: {recommendation['solution']}",
                 f"  Azure last updated: {recommendation['lastUpdated']}",
             ])
+        lines.extend(["", "CURRENT COMPUTE INVENTORY (not attributed Savings Plan coverage)"])
+        for entry in result.get("computeInventory", []):
+            lines.extend([
+                f"Reference: {entry.get('recommendationReference', 'Not supplied')}",
+                f"  Subscription: {entry.get('subscriptionName', 'Not supplied')}",
+                f"  Resource: {entry.get('name', 'Not supplied')} | Type: {entry.get('computeType', 'Not supplied')}",
+                f"  Compute SKU: {entry.get('computeSku') or 'Not supplied'}",
+                f"  Reported license type: {entry.get('licenseType') or 'Not supplied'}",
+            ])
+        lines.append(
+            "Inventory covers VMs, VM scale sets and App Service plans only; check source coverage for denied or unavailable data. "
+            "Current configuration does not prove historical usage, benefit coverage, eligibility or per-SKU discounts."
+        )
         return "\n".join(lines)
     currency = result["currencyCode"]
     lines = [

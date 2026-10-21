@@ -231,6 +231,7 @@
       "properties": {
         "mode": {"type": "string"},
         "currencyCode": {"type": "string"},
+        "discountPercent": {"type": "number", "description": "User-supplied modeled discount, not a verified Azure price."},
         "options": {"type": "array", "items": {"type": "object"}},
         "result": {"type": "object"},
         "baselineEligibleCostObserved": {"type": "number"},

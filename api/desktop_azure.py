@@ -18,6 +18,12 @@ from .azure_provider import (
 )
 from .models import LOOKBACK_PERIODS, TERMS
 
+COMPUTE_SOURCES = (
+    ("virtualMachines", "Microsoft.Compute/virtualMachines", "2024-07-01", "Virtual machine"),
+    ("virtualMachineScaleSets", "Microsoft.Compute/virtualMachineScaleSets", "2024-07-01", "Virtual machine scale set"),
+    ("appServicePlans", "Microsoft.Web/serverfarms", "2024-11-01", "App Service plan"),
+)
+
 
 def context_id(value: str) -> str:
     try:
@@ -135,7 +141,7 @@ class DesktopAzure:
                 "advisor": {"source": "Azure Advisor Recommendations API", "apiVersion": "2025-01-01"},
                 "savingsPlan": {"source": "Azure Cost Management Benefit Recommendations API", "apiVersion": "2026-06-01"},
             },
-            "advisorRecommendations": [], "recommendations": [],
+            "advisorRecommendations": [], "recommendations": [], "computeInventory": [],
             "notice": (
                 "Read-only Azure recommendations for existing workloads; no CSV is required. "
                 "Advisor returns cached Cost recommendations, typically with a 30-day Savings Plan lookback. "
@@ -172,6 +178,25 @@ class DesktopAzure:
                     })
                 except ConnectedProviderError as exc:
                     result["coverage"]["savingsPlan"].update({"status": exc.status, "message": str(exc)})
+                for key, resource_type, version, label in COMPUTE_SOURCES:
+                    coverage: dict[str, Any] = {
+                        "source": f"Azure Resource Manager {resource_type} List",
+                        "apiVersion": version,
+                    }
+                    result["coverage"][key] = coverage
+                    try:
+                        items = arm_list(
+                            f"https://management.azure.com{scope}/providers/{resource_type}",
+                            token, {"api-version": version}, f"Azure {label} inventory",
+                        )
+                        inventory = [
+                            _compute_record(item, subscription_id, resource_type, label, coverage["source"])
+                            for item in items
+                        ]
+                        result["computeInventory"].extend(sorted(inventory, key=lambda item: item["resourceId"].lower()))
+                        coverage.update({"status": "ok" if inventory else "empty", "count": len(inventory)})
+                    except ConnectedProviderError as exc:
+                        coverage.update({"status": exc.status, "message": str(exc)})
         except ClientAuthenticationError as exc:
             raise ConnectedProviderError("Azure authentication expired or was denied. Sign in again to the selected tenant.") from exc
         result["completeness"] = (
@@ -197,7 +222,7 @@ class DesktopAzure:
             "collectedAt": datetime.now(timezone.utc).isoformat(),
             "context": {"tenantId": tenant_id, "subscriptionIds": selected},
             "filters": {"term": term, "lookbackPeriod": lookback, "recommendationScope": "Single"},
-            "coverage": {}, "recommendations": [], "advisorRecommendations": [],
+            "coverage": {}, "recommendations": [], "advisorRecommendations": [], "computeInventory": [],
             "notice": (
                 "Each subscription is assessed independently at Single scope using existing Azure recommendations. "
                 "No CSV is required. Commitments and savings are not added across subscriptions or alternatives. "
@@ -212,15 +237,20 @@ class DesktopAzure:
                 collected = self.analyze(tenant_id, subscription_id, term, lookback)
             except (ConnectedProviderError, ValueError) as exc:
                 status = exc.status if isinstance(exc, ConnectedProviderError) else "unavailable"
-                for source in ("advisor", "savingsPlan"):
+                sources = (
+                    ("advisor", "Azure Advisor", "2025-01-01"),
+                    ("savingsPlan", "Azure Cost Management", "2026-06-01"),
+                    *((key, f"Azure Resource Manager {resource_type} List", version)
+                      for key, resource_type, version, _label in COMPUTE_SOURCES),
+                )
+                for source, name, version in sources:
                     result["coverage"][f"{subscription_id}/{source}"] = {
                         **metadata, "status": status, "message": str(exc),
-                        "source": "Azure Advisor" if source == "advisor" else "Azure Cost Management",
-                        "apiVersion": "2025-01-01" if source == "advisor" else "2026-06-01",
+                        "source": name, "apiVersion": version,
                     }
                 continue
-            for key in ("recommendations", "advisorRecommendations"):
-                result[key].extend({**item, **metadata} for item in collected[key])
+            for key in ("recommendations", "advisorRecommendations", "computeInventory"):
+                result[key].extend({**item, **metadata} for item in collected.get(key, []))
             for source, coverage in collected["coverage"].items():
                 result["coverage"][f"{subscription_id}/{source}"] = {
                     **coverage, **metadata, "collectedAt": collected["collectedAt"],
@@ -231,6 +261,32 @@ class DesktopAzure:
         return result
 
 
+def _compute_record(
+    item: dict[str, Any], subscription_id: str, resource_type: str, label: str, source: str,
+) -> dict[str, Any]:
+    resource_id = item.get("id")
+    properties = item.get("properties")
+    if (
+        not isinstance(resource_id, str)
+        or not resource_id.lower().startswith(f"/subscriptions/{subscription_id}/resourcegroups/".lower())
+        or str(item.get("type", "")).lower() != resource_type.lower()
+        or not isinstance(properties, dict)
+    ):
+        raise ConnectedProviderError(f"Azure {label} inventory returned malformed or out-of-scope resource metadata.")
+    profile = properties.get("hardwareProfile") if resource_type == "Microsoft.Compute/virtualMachines" else item.get("sku")
+    sku = profile.get("vmSize" if resource_type == "Microsoft.Compute/virtualMachines" else "name") if isinstance(profile, dict) else None
+    vm_profile = properties.get("virtualMachineProfile") if resource_type == "Microsoft.Compute/virtualMachineScaleSets" else properties
+    license_type = vm_profile.get("licenseType") if isinstance(vm_profile, dict) else None
+    return {
+        "resourceId": resource_id,
+        "recommendationReference": hashlib.sha256(resource_id.lower().encode()).hexdigest()[:16],
+        "name": item.get("name") if isinstance(item.get("name"), str) else None,
+        "computeType": label, "computeSku": sku if isinstance(sku, str) else None,
+        "licenseType": license_type if isinstance(license_type, str) else None,
+        "source": source,
+    }
+
+
 def _advisor_record(item: dict[str, Any]) -> dict[str, Any]:
     properties = item.get("properties")
     if not isinstance(properties, dict):
@@ -238,6 +294,8 @@ def _advisor_record(item: dict[str, Any]) -> dict[str, Any]:
     description = properties.get("shortDescription") or {}
     if not isinstance(description, dict):
         raise ConnectedProviderError("Azure Advisor returned a malformed description.")
+    resource_metadata = properties.get("resourceMetadata")
+    resource_id = resource_metadata.get("resourceId") if isinstance(resource_metadata, dict) else None
     return {
         "recommendationReference": hashlib.sha256(str(item.get("id", "")).encode()).hexdigest()[:16],
         "category": properties.get("category"),
@@ -245,4 +303,5 @@ def _advisor_record(item: dict[str, Any]) -> dict[str, Any]:
         "lastUpdated": properties.get("lastUpdated"),
         "problem": description.get("problem"),
         "solution": description.get("solution"),
+        "resourceId": resource_id if isinstance(resource_id, str) else None,
     }
