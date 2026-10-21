@@ -1,6 +1,8 @@
 # Azure Savings Plan Advisor
 
-**Windows app:** [Download the Windows x64 app installer](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/download/v0.4.1/AzureSavingsPlanAdvisor-0.4.1-Setup-x64.exe).
+**Windows app:** [Get the Windows x64 app installer from this repository](downloads/windows/AzureSavingsPlanAdvisor-0.4.1-Setup-x64.exe).
+Open the file and select **Download raw file** on GitHub, or run it from your
+local clone. [Verify its SHA-256 checksum](downloads/windows/SHA256SUMS.txt).
 For API development, see [prerequisite installers](#windows-installers)
 and [local development](#local-development).
 
@@ -15,8 +17,10 @@ User -> Copilot Studio -> Entra-authenticated REST API -> Azure Function
 
 ## Install the Windows app
 
-1. Open [the latest release](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/latest)
-   and download **AzureSavingsPlanAdvisor-0.4.1-Setup-x64.exe** from Assets.
+1. Open [the installer checked into this repository](downloads/windows/AzureSavingsPlanAdvisor-0.4.1-Setup-x64.exe)
+   and select **Download raw file**, or use the copy under `downloads\windows`
+   in your local clone. The same installer is also available in
+   [the latest release](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/latest).
    Sign into GitHub with repository access; this repository is private.
 2. Run the installer on Windows 10/11 x64. It installs for your current user,
    creates a Start menu shortcut, and optionally creates a desktop shortcut.

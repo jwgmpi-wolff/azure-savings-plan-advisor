@@ -23,4 +23,5 @@ installer/
 scripts/
 build/
 dist/
+downloads/
 *.spec
