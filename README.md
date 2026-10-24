@@ -15,6 +15,20 @@ User -> Copilot Studio -> Entra-authenticated REST API -> Azure Function
                                                     -> Cost Management API
 ```
 
+<!-- project-downloads:start -->
+## APK and installer downloads
+
+This repository is private. Downloads hosted here require a GitHub account with repository access.
+
+| Package | Download | Source |
+| --- | --- | --- |
+| Windows installer | [AzureSavingsPlanAdvisor-0.7.2-Setup-x64.exe](https://github.com/jerrywolff_microsoft/azure-savings-plan-advisor/releases/download/v0.7.2/AzureSavingsPlanAdvisor-0.7.2-Setup-x64.exe) | v0.7.2 |
+
+Android may require approval to install apps from this download source. Debug APKs are labeled above. Windows executables that are not setup packages may require accompanying project files; follow the project-specific instructions below.
+
+- [Download the complete source ZIP](https://github.com/jerrywolff_microsoft/azure-savings-plan-advisor/archive/refs/heads/main.zip).
+<!-- project-downloads:end -->
+
 ## Install the Windows app
 
 1. Open [the installer checked into this repository](downloads/windows/AzureSavingsPlanAdvisor-0.7.2-Setup-x64.exe)
@@ -576,3 +590,9 @@ operation.
   amounts; this service does not query, infer, aggregate, or interpolate usage.
 - Connected recommendations depend on Azure API availability, the signed-in
   user's delegated permissions, and supported billing scopes.
+
+## Copyright
+
+Copyright (c) 2026 Jerry Wolff. See [COPYRIGHT](COPYRIGHT) for the scope of this
+notice. Existing licenses and third-party attribution remain unchanged; this
+notice does not grant additional permissions.
