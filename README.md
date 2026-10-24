@@ -18,13 +18,32 @@ User -> Copilot Studio -> Entra-authenticated REST API -> Azure Function
 <!-- project-downloads:start -->
 ## APK and installer downloads
 
-| Package | Download | Source |
+Every available project package is indexed below, including older versions. Prefer the newest stable version for your platform and architecture. Debug APKs and prereleases are labeled; archives are not necessarily standalone installers.
+
+### Release downloads: all published versions
+
+| Version / source | Package | Download |
 | --- | --- | --- |
-| Windows installer | [AzureSavingsPlanAdvisor-0.4.1-Setup-x64.exe](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/download/v0.4.1/AzureSavingsPlanAdvisor-0.4.1-Setup-x64.exe) | v0.4.1 |
+| v0.4.1 | Windows installer | [AzureSavingsPlanAdvisor-0.4.1-Setup-x64.exe](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/download/v0.4.1/AzureSavingsPlanAdvisor-0.4.1-Setup-x64.exe) |
+| v0.4.0 | Windows installer | [AzureSavingsPlanAdvisor-0.4.0-Setup-x64.exe](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/download/v0.4.0/AzureSavingsPlanAdvisor-0.4.0-Setup-x64.exe) |
+| v0.3.0 | Windows installer | [AzureSavingsPlanAdvisor-0.3.0-Setup-x64.exe](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/download/v0.3.0/AzureSavingsPlanAdvisor-0.3.0-Setup-x64.exe) |
+| v0.2.0 | Windows installer | [AzureSavingsPlanAdvisor-0.2.0-Setup-x64.exe](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/download/v0.2.0/AzureSavingsPlanAdvisor-0.2.0-Setup-x64.exe) |
 
-Android may require approval to install apps from this download source. Debug APKs are labeled above. Windows executables that are not setup packages may require accompanying project files; follow the project-specific instructions below.
+### Repository-hosted packages: all available versions
 
-- [Download the complete source ZIP](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/archive/refs/heads/main.zip).
+| Version / source | Package | Download |
+| --- | --- | --- |
+| repository | Windows installer | [downloads/windows/AzureSavingsPlanAdvisor-0.4.1-Setup-x64.exe](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/raw/refs/heads/main/downloads/windows/AzureSavingsPlanAdvisor-0.4.1-Setup-x64.exe) |
+
+Git LFS links download the package itself, not a pointer file. Executables without a setup wrapper may require accompanying project files.
+
+### Setup scripts and source
+
+
+- [Download the complete source ZIP](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/archive/refs/heads/main.zip). Extract the complete checkout before running setup scripts unless the project instructions explicitly support standalone installation.
+- [Browse all releases and their assets](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases).
+
+Android may require approval to install apps from the download source. Follow the project-specific installation, signing, checksum, and prerequisite instructions elsewhere in this README.
 <!-- project-downloads:end -->
 
 ## Install the Windows app
