@@ -4,6 +4,9 @@ import json
 import os
 import shutil
 import subprocess
+import threading
+import time
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -14,7 +17,12 @@ from azure.identity import AzureCliCredential
 from .azure_provider import MANAGEMENT_RESOURCE
 
 
-def run_cli(arguments: list[str], timeout: int, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[bytes]:
+def run_cli(
+    arguments: list[str], timeout: int, env: dict[str, str] | None = None,
+    *, cancel_event: threading.Event | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    if cancel_event is not None and cancel_event.is_set():
+        raise ClientAuthenticationError("Azure operation cancelled. No app context was loaded.")
     executable = shutil.which("az")
     if not executable:
         raise ClientAuthenticationError("Install Azure CLI, then restart the app.")
@@ -22,6 +30,17 @@ def run_cli(arguments: list[str], timeout: int, env: dict[str, str] | None = Non
         "capture_output": True, "stdin": subprocess.DEVNULL,
         "timeout": timeout, "check": False,
     }
+    command = [executable, *arguments]
+    if os.name == "nt" and Path(executable).suffix.lower() == ".cmd":
+        runtime = Path(executable).parent.parent / "python.exe"
+        if runtime.is_file():
+            command = [str(runtime), "-IBm", "azure.cli", *arguments]
+            env = {**(os.environ if env is None else env), "AZ_INSTALLER": "MSI"}
+        elif cancel_event is not None:
+            raise ClientAuthenticationError(
+                "This Azure CLI launcher cannot be cancelled safely. Update the Azure CLI Windows "
+                "installation, or run az login in PowerShell and select Refresh context."
+            )
     if env is not None:
         options["env"] = env
     if os.name == "nt":
@@ -31,7 +50,35 @@ def run_cli(arguments: list[str], timeout: int, env: dict[str, str] | None = Non
         startup.wShowWindow = subprocess.SW_HIDE
         options["startupinfo"] = startup
     try:
-        return subprocess.run([executable, *arguments], **options)
+        if cancel_event is None:
+            return subprocess.run(command, **options)
+        options.pop("capture_output")
+        options.pop("timeout")
+        options.pop("check")
+        options.update(stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        deadline = time.monotonic() + timeout
+        with subprocess.Popen(command, **options) as process:
+            try:
+                while True:
+                    if cancel_event.is_set():
+                        raise ClientAuthenticationError("Azure operation cancelled. No app context was loaded.")
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise ClientAuthenticationError(
+                            "Azure sign-in timed out. Complete browser authentication before retrying, "
+                            "or run az login in PowerShell and select Refresh context."
+                        )
+                    try:
+                        stdout, stderr = process.communicate(timeout=min(0.2, remaining))
+                    except subprocess.TimeoutExpired:
+                        continue
+                    if cancel_event.is_set():
+                        raise ClientAuthenticationError("Azure operation cancelled. No app context was loaded.")
+                    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate(timeout=5)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ClientAuthenticationError(
             "Azure CLI could not complete the operation. Retry sign-in or check your CLI installation."

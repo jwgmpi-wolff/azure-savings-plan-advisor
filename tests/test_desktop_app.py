@@ -1,5 +1,6 @@
 import json
 import sys
+import threading
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -308,7 +309,7 @@ def test_desktop_window_analysis_and_export(tmp_path, tk_root):
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows desktop interaction test")
-def test_connected_window_defaults_to_azure_without_csv_and_clears_on_tenant_change(tk_root):
+def test_connected_window_uses_azure_without_csv_and_clears_on_tenant_change(tk_root):
     import tkinter as tk
 
     tenant = "00000000-0000-0000-0000-000000000001"
@@ -328,7 +329,8 @@ def test_connected_window_defaults_to_azure_without_csv_and_clears_on_tenant_cha
     root.withdraw()
     try:
         window = AdvisorWindow(root)
-        assert window.values["mode"].get() == "connected"
+        window.values["mode"].set("connected")
+        window.change_mode()
         assert window.values["csvFile"].get() == ""
         window.context_loaded({
             "tenantId": tenant, "tenants": [tenant, other],
@@ -365,6 +367,8 @@ def test_multiple_subscription_selection_filtering_and_invalidation(tk_root):
         {"subscriptionId": "00000000-0000-0000-0000-000000000003", "name": "Engineering"},
     ]
     window = AdvisorWindow(tk_root)
+    window.values["mode"].set("connected")
+    window.change_mode()
     window.select_subscriptions()
     assert window.selected_subscription_ids == set()
     window.context_loaded({"tenantId": tenant, "tenants": [tenant], "subscriptions": subscriptions})
@@ -446,26 +450,32 @@ def test_dashboard_export_actions_write_requested_format(tmp_path, kind, tk_root
         root.destroy()
 
 
-def test_compute_modeler_needs_no_csv_or_azure_and_copies_only_current_model(tk_root):
+def test_compute_modeler_calls_copilot_and_rejects_stale_analysis(tk_root):
     window = AdvisorWindow(tk_root)
-    window.values["mode"].set("modeler")
-    window.change_mode()
+    assert window.values["mode"].get() == "modeler"
+    assert window.values["aiModel"].get() == "llama3.1:8b"
+    assert "copilotAccount" not in window.values
     assert window.modeler_frame.winfo_manager() == "grid"
     assert window.offline_frame.winfo_manager() == ""
     assert window.azure_frame.winfo_manager() == ""
     inputs = {
         "modelPeriodHours": "100", "modelComputeHours": "90", "modelPaygRate": "10",
         "modelDiscountPercent": "20", "modelCommitment": "8", "modelCurrency": "USD", "modelTerm": "P1Y",
+        "aiModel": "llama3.1:8b",
     }
     for key, value in inputs.items():
         window.values[key].set(value)
-    with patch.object(window.azure, "analyze_many") as azure, patch("desktop_app.analyze_csv_file") as csv:
+    with patch.object(window.azure, "analyze_many") as azure, \
+         patch("desktop_app.analyze_csv_file") as csv, \
+         patch("desktop_app.threading.Thread") as thread:
         window.analyze()
         azure.assert_not_called()
         csv.assert_not_called()
+        thread.assert_called_once()
+        worker = thread.call_args.kwargs["target"]
     assert window.result["savingsAmount"] == 100
     assert window.result["breakEvenHours"] == 80
-    assert str(window.copilot_button["state"]) == "normal"
+    assert str(window.copilot_button["state"]) == "disabled"
     assert len(window.dashboard.table.get_children()) == 6
     assert "80.00" in window.dashboard.table.item("0", "values")
     assert "calculation-based" in window.output.get("1.0", "end")
@@ -474,21 +484,40 @@ def test_compute_modeler_needs_no_csv_or_azure_and_copies_only_current_model(tk_
         for item in window.dashboard.chart.find_all() if window.dashboard.chart.type(item) == "text"
     )
     assert "Net savings / loss" in text and "-800.00 USD" in text
-    with patch.object(tk_root, "clipboard_clear") as clear, \
-         patch.object(tk_root, "clipboard_append") as append, \
-         patch("desktop_app.messagebox.showinfo") as info:
-        window.copy_for_copilot()
-        clear.assert_called_once()
-        assert '"breakEvenHours": 80.0' in append.call_args.args[0]
-        info.assert_called_once()
-    window.values["modelComputeHours"].set("10")
+    analysis = {
+        "status": "complete", "source": "Ollama (local)", "model": "llama3.1:8b", "generatedAt": "2026-01-01T00:00:00Z",
+        "modelCollectedAt": window.result["collectedAt"],
+        "explanation": "Synthetic AI response: Break-even is 80 hours (80%); savings are 100 USD.",
+    }
+    with patch("desktop_app.explain_model", return_value=analysis) as explain, \
+         patch.object(tk_root, "clipboard_append") as clipboard:
+        worker()
+        explain.assert_called_once()
+        assert explain.call_args.args[0]["breakEvenHours"] == 80
+        assert explain.call_args.kwargs["model"] == "llama3.1:8b"
+        clipboard.assert_not_called()
+    window.poll_events()
+    assert window.result["copilotAnalysis"] == analysis
+    assert analysis["explanation"] in window.copilot_output.get("1.0", "end")
+    assert str(window.copilot_button["state"]) == "normal"
+    assert analysis["explanation"] in window.report.notices
+    with patch("desktop_app.threading.Thread") as thread:
+        window.ask_copilot()
+        stale_worker = thread.call_args.kwargs["target"]
+    window.values["aiModel"].set("synthetic-local:8b")
     assert window.result is None
     assert str(window.copilot_button["state"]) == "disabled"
-    with patch.object(tk_root, "clipboard_append") as append, patch("desktop_app.messagebox.showerror") as error:
-        window.copy_for_copilot()
-        append.assert_not_called()
+    with patch("desktop_app.explain_model", return_value=analysis):
+        stale_worker()
+    window.poll_events()
+    assert analysis["explanation"] not in window.copilot_output.get("1.0", "end")
+    with patch("desktop_app.explain_model") as explain, patch("desktop_app.messagebox.showerror") as error:
+        window.ask_copilot()
+        explain.assert_not_called()
         error.assert_called_once()
-    window.analyze()
+    window.values["modelComputeHours"].set("10")
+    with patch("desktop_app.threading.Thread"):
+        window.analyze()
     assert window.result["outcome"] == "Loss"
     window.values["modelComputeHours"].set("101")
     with patch("desktop_app.messagebox.showerror") as error:
@@ -497,6 +526,168 @@ def test_compute_modeler_needs_no_csv_or_azure_and_copies_only_current_model(tk_
     assert window.result is None
     assert all(str(button["state"]) == "disabled" for button in window.export_buttons)
     tk_root.destroy()
+
+
+def test_copilot_failure_preserves_calculations_and_allows_retry(tk_root):
+    from api.compute_modeler import calculate_compute_model
+    from api.copilot_provider import CopilotError
+
+    window = AdvisorWindow(tk_root)
+    window.show_result(calculate_compute_model(
+        period_hours=100, compute_hours=90, payg_rate=10, discount_percent=20,
+        hourly_commitment=8, currency_code="USD", term="P1Y",
+    ))
+    with patch("desktop_app.threading.Thread") as thread:
+        window.ask_copilot()
+        window.ask_copilot()
+        thread.assert_called_once()
+        worker = thread.call_args.kwargs["target"]
+    with patch("desktop_app.explain_model", side_effect=CopilotError("Start local Ollama.")):
+        worker()
+    with patch("desktop_app.messagebox.showerror") as error:
+        window.poll_events()
+        error.assert_called_once()
+    assert window.result["savingsAmount"] == 100
+    assert window.result["copilotAnalysis"]["status"] == "failed"
+    assert "REQUEST FAILED" in window.copilot_output.get("1.0", "end")
+    assert str(window.copilot_button["state"]) == "normal"
+    assert str(window.save_button["state"]) == "normal"
+    assert "AI analysis unavailable: Start local Ollama." in window.report.notices
+    with patch("desktop_app.threading.Thread") as thread:
+        window.ask_copilot()
+        thread.assert_called_once()
+    tk_root.destroy()
+
+
+def test_browser_login_wait_keeps_ui_responsive_and_can_be_cancelled(tk_root):
+    window = AdvisorWindow(tk_root)
+    started = threading.Event()
+    heartbeats = []
+
+    def waiting_login(_tenant, *, cancel_event):
+        started.set()
+        if not cancel_event.wait(5):
+            raise AssertionError("Synthetic login was not cancelled")
+        raise ConnectedProviderError("Synthetic sign-in cancelled.")
+
+    with patch.object(window.azure, "sign_in", side_effect=waiting_login), \
+         patch.object(window.azure, "refresh") as refresh, \
+         patch("desktop_app.messagebox.showerror") as error:
+        window.sign_in()
+        assert started.wait(1)
+        tk_root.after(10, lambda: heartbeats.append(True))
+        deadline = time.monotonic() + 2
+        while not heartbeats and time.monotonic() < deadline:
+            tk_root.update()
+            time.sleep(0.01)
+        assert heartbeats and window.busy
+        assert str(window.cancel_login_button["state"]) == "normal"
+        window.poll_events()
+        assert "Waiting for browser sign-in" in window.login_status.cget("text")
+        window.cancel_sign_in()
+        deadline = time.monotonic() + 3
+        while window.busy and time.monotonic() < deadline:
+            tk_root.update()
+            time.sleep(0.01)
+        assert not window.busy
+        assert window.login_cancel_event is None
+        assert str(window.cancel_login_button["state"]) == "disabled"
+        assert str(window.context_controls[0]["state"]) == "readonly"
+        assert "sign-in cancelled" in window.output.get("1.0", "end")
+        refresh.assert_not_called()
+        error.assert_not_called()
+
+
+def test_window_close_cancels_login_before_destroying_window(tk_root):
+    window = AdvisorWindow(tk_root)
+    finished = threading.Event()
+    event_seen = []
+
+    def waiting_login(_tenant, *, cancel_event):
+        event_seen.append(cancel_event)
+        cancel_event.wait(3)
+        finished.set()
+        raise ConnectedProviderError("Synthetic sign-in cancelled.")
+
+    with patch.object(window.azure, "sign_in", side_effect=waiting_login), \
+         patch("desktop_app.messagebox.showerror") as error:
+        window.sign_in()
+        window.close()
+        deadline = time.monotonic() + 3
+        while tk_root.winfo_exists() and time.monotonic() < deadline:
+            tk_root.update()
+            time.sleep(0.01)
+        assert finished.is_set()
+        assert event_seen[0].is_set()
+        assert not tk_root.winfo_exists()
+        error.assert_not_called()
+
+
+def test_successful_login_distinguishes_browser_wait_from_context_discovery(tk_root):
+    window = AdvisorWindow(tk_root)
+    tenant = "00000000-0000-0000-0000-000000000001"
+    context = {"tenantId": tenant, "tenants": [tenant], "subscriptions": []}
+    with patch.object(window.azure, "sign_in", return_value=tenant) as login, \
+         patch.object(window.azure, "refresh", return_value=context) as refresh:
+        window.sign_in()
+        deadline = time.monotonic() + 3
+        while window.busy and time.monotonic() < deadline:
+            tk_root.update()
+            time.sleep(0.01)
+        assert not window.busy
+        login.assert_called_once()
+        assert isinstance(login.call_args.kwargs["cancel_event"], threading.Event)
+        refresh.assert_called_once_with(tenant)
+        assert window.login_cancel_event is None
+        assert str(window.cancel_login_button["state"]) == "disabled"
+        assert "No enabled subscriptions" in window.output.get("1.0", "end")
+
+
+def test_switch_account_clears_previous_directory_and_subscription_before_sign_in(tk_root):
+    window = AdvisorWindow(tk_root)
+    tenant = "00000000-0000-0000-0000-000000000001"
+    subscription = "00000000-0000-0000-0000-000000000002"
+    window.context_loaded({
+        "tenantId": tenant, "tenants": [tenant],
+        "subscriptions": [{"subscriptionId": subscription, "name": "Synthetic subscription"}],
+    })
+    window.select_subscriptions()
+    window.show_result(analyze_csv_file(SAMPLE, assumptions()))
+    assert window.result is not None
+    assert window.selected_subscription_ids == {subscription}
+    with patch.object(window, "sign_in") as login:
+        window.switch_account()
+        login.assert_called_once_with()
+    assert window.values["tenantId"].get() == ""
+    assert tuple(window.tenant_combo["values"]) == ()
+    assert window.azure.tenant_id is None
+    assert window.subscription_ids == {}
+    assert window.selected_subscription_ids == set()
+    assert window.result is None
+    assert str(window.save_button["state"]) == "disabled"
+
+
+def test_scoped_login_keeps_the_explicitly_selected_tenant(tk_root):
+    window = AdvisorWindow(tk_root)
+    tenant = "00000000-0000-0000-0000-000000000001"
+    window.values["tenantId"].set(tenant)
+    with patch("desktop_app.threading.Thread") as thread, \
+         patch.object(window.azure, "sign_in", return_value=tenant) as login:
+        window.sign_in()
+        worker = thread.call_args.kwargs["target"]
+        worker()
+        assert login.call_args.args == (tenant,)
+
+
+def test_account_switch_does_not_mutate_context_during_an_active_operation(tk_root):
+    window = AdvisorWindow(tk_root)
+    tenant = "00000000-0000-0000-0000-000000000001"
+    window.values["tenantId"].set(tenant)
+    window.busy = True
+    with patch.object(window, "sign_in") as login:
+        window.switch_account()
+        login.assert_not_called()
+    assert window.values["tenantId"].get() == tenant
 
 
 def test_compute_modeler_rejects_missing_prices_instead_of_inventing_savings(tk_root):

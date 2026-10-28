@@ -292,6 +292,77 @@ def test_cli_sign_in_is_tenant_specific_and_does_not_expose_output(monkeypatch):
     assert calls[0][1]["check"] is False
 
 
+def test_account_wide_sign_in_omits_tenant_override_and_previous_directory(monkeypatch):
+    client = DesktopAzure()
+    client.tenant_id = TENANT
+    run = Mock(return_value=SimpleNamespace(returncode=0, stdout=b"", stderr=b""))
+    monkeypatch.setattr("api.desktop_azure.run_cli", run)
+    monkeypatch.setattr(client, "current_tenant", lambda **_kwargs: TENANT)
+    assert client.sign_in("") == TENANT
+    arguments = run.call_args.args[0]
+    assert arguments[0] == "login"
+    assert "--tenant" not in arguments
+    assert "organizations" not in arguments
+    assert TENANT not in arguments
+
+
+@pytest.mark.parametrize("diagnostic", [
+    b"ERROR: AADSTS50020: selected account does not exist in tenant. access_token=synthetic-secret",
+    b"ERROR: selected user account does not exist in tenant 'synthetic-private-directory'",
+    b"ERROR: AADSTS90072: external account not found. password=synthetic-secret",
+])
+def test_tenant_mismatch_is_actionable_without_leaking_authentication_details(monkeypatch, diagnostic):
+    client = DesktopAzure()
+    client.tenant_id = TENANT
+    client.subscriptions = [{"subscriptionId": SUB}]
+    run = Mock(return_value=SimpleNamespace(returncode=1, stdout=b"", stderr=diagnostic))
+    monkeypatch.setattr("api.desktop_azure.run_cli", run)
+    current = Mock()
+    monkeypatch.setattr(client, "current_tenant", current)
+    with pytest.raises(ConnectedProviderError, match="tenant/account mismatch") as failure:
+        client.sign_in(TENANT)
+    message = str(failure.value)
+    assert "Switch Azure account" in message
+    assert "synthetic-secret" not in message and "synthetic-private-directory" not in message
+    assert client.tenant_id is None and client.subscriptions == []
+    current.assert_not_called()
+
+
+def test_unknown_sign_in_failure_exposes_only_safe_error_codes(monkeypatch):
+    run = Mock(return_value=SimpleNamespace(
+        returncode=1, stdout=b"", stderr=b"AADSTS53003 blocked: client_secret=synthetic-secret private-person@example.test",
+    ))
+    monkeypatch.setattr("api.desktop_azure.run_cli", run)
+    with pytest.raises(ConnectedProviderError) as failure:
+        DesktopAzure().sign_in(TENANT)
+    assert "AADSTS53003" in str(failure.value)
+    assert "Conditional Access" in str(failure.value)
+    assert "synthetic-secret" not in str(failure.value)
+    assert "private-person" not in str(failure.value)
+
+
+@pytest.mark.parametrize("diagnostic", [
+    b"ERROR: AADSTS90002: Tenant 'synthetic-private-directory' not found. password=synthetic-secret",
+    b"ERROR: AADSTS90002 AADSTS50020: private-person@example.test access_token=synthetic-secret",
+])
+def test_tenant_not_found_is_not_misreported_as_account_mismatch_or_cancellation(monkeypatch, diagnostic):
+    client = DesktopAzure()
+    run = Mock(return_value=SimpleNamespace(returncode=1, stdout=b"", stderr=diagnostic))
+    monkeypatch.setattr("api.desktop_azure.run_cli", run)
+    with pytest.raises(ConnectedProviderError, match="directory was not found") as failure:
+        client.sign_in("")
+    message = str(failure.value)
+    assert "AADSTS90002" in message
+    assert "without a tenant override" in message
+    assert "Conditional Access" not in message
+    assert "was cancelled or denied" not in message
+    assert "synthetic-secret" not in message
+    assert "private-person" not in message
+    assert "synthetic-private-directory" not in message
+    assert "--tenant" not in run.call_args.args[0]
+    assert client.tenant_id is None and client.subscriptions == []
+
+
 def test_cli_service_principal_is_never_used(monkeypatch):
     client = DesktopAzure()
     monkeypatch.setattr(desktop_identity.shutil, "which", lambda _: "az.cmd")

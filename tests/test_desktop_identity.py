@@ -1,6 +1,9 @@
 import json
 import os
 import subprocess
+import sys
+import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -70,3 +73,99 @@ def test_tenant_and_scope_cannot_be_overridden(monkeypatch):
     with pytest.raises(ClientAuthenticationError):
         credential.get_token("https://unexpected.invalid/.default")
     run.assert_not_called()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows MSI process configuration")
+def test_msi_runner_calls_python_directly_so_cancellation_cannot_orphan_a_shell_child(monkeypatch, tmp_path):
+    launcher = tmp_path / "wbin" / "az.cmd"
+    launcher.parent.mkdir()
+    launcher.write_text("synthetic launcher")
+    runtime = tmp_path / "python.exe"
+    runtime.write_bytes(b"synthetic executable fixture")
+    monkeypatch.setattr(desktop_identity.shutil, "which", lambda _: str(launcher))
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, b"{}", b""))
+    monkeypatch.setattr(desktop_identity.subprocess, "run", run)
+    environment = {"SYNTHETIC_OPTION": "value"}
+    run_cli(["account", "show"], timeout=60, env=environment)
+    assert run.call_args.args[0] == [str(runtime), "-IBm", "azure.cli", "account", "show"]
+    assert run.call_args.kwargs["env"] == {**environment, "AZ_INSTALLER": "MSI"}
+    assert environment == {"SYNTHETIC_OPTION": "value"}
+
+
+def test_cancelled_operation_does_not_start_a_cli_process(monkeypatch):
+    event = threading.Event()
+    event.set()
+    popen = Mock()
+    monkeypatch.setattr(desktop_identity.subprocess, "Popen", popen)
+    with pytest.raises(ClientAuthenticationError, match="cancelled"):
+        run_cli(["login"], timeout=300, cancel_event=event)
+    popen.assert_not_called()
+
+
+@pytest.mark.parametrize("reason", ["cancel", "timeout"])
+def test_waiting_login_is_killed_and_reaped_on_cancel_or_timeout(monkeypatch, reason):
+    event = threading.Event()
+    monkeypatch.setattr(desktop_identity.shutil, "which", lambda _: sys.executable)
+    process = Mock()
+    process.__enter__ = Mock(return_value=process)
+    process.__exit__ = Mock(return_value=False)
+    process.poll.return_value = None
+
+    def communicate(**_kwargs):
+        if process.kill.called:
+            return b"", b"synthetic-private-diagnostic"
+        event.set()
+        raise subprocess.TimeoutExpired("synthetic-cli", 0.2)
+
+    process.communicate.side_effect = communicate
+    popen = Mock(return_value=process)
+    monkeypatch.setattr(desktop_identity.subprocess, "Popen", popen)
+    if reason == "timeout":
+        monkeypatch.setattr(desktop_identity.time, "monotonic", Mock(side_effect=[0, 301]))
+    with pytest.raises(ClientAuthenticationError, match="cancelled" if reason == "cancel" else "timed out") as error:
+        run_cli(["login"], timeout=300, cancel_event=event)
+    process.kill.assert_called_once()
+    assert process.communicate.call_args.kwargs["timeout"] == 5
+    assert "private" not in str(error.value)
+    assert popen.call_args.kwargs["stdin"] == subprocess.DEVNULL
+    assert popen.call_args.kwargs["stdout"] == subprocess.PIPE
+
+
+def test_cancellable_cli_returns_output_without_killing_completed_process(monkeypatch):
+    monkeypatch.setattr(desktop_identity.shutil, "which", lambda _: sys.executable)
+    process = Mock()
+    process.__enter__ = Mock(return_value=process)
+    process.__exit__ = Mock(return_value=False)
+    process.returncode = 0
+    process.poll.return_value = 0
+    process.communicate.return_value = (b"{}", b"")
+    monkeypatch.setattr(desktop_identity.subprocess, "Popen", Mock(return_value=process))
+    result = run_cli(["account", "show"], timeout=60, cancel_event=threading.Event())
+    assert result.returncode == 0
+    assert result.stdout == b"{}"
+    process.kill.assert_not_called()
+
+
+def test_cancellation_reaps_a_real_waiting_cli_process(monkeypatch):
+    event = threading.Event()
+    created = []
+    original_popen = subprocess.Popen
+
+    def record_process(*args, **kwargs):
+        process = original_popen(*args, **kwargs)
+        created.append(process)
+        return process
+
+    monkeypatch.setattr(desktop_identity.shutil, "which", lambda _: sys.executable)
+    monkeypatch.setattr(desktop_identity.subprocess, "Popen", record_process)
+    timer = threading.Timer(0.3, event.set)
+    timer.start()
+    started = time.monotonic()
+    try:
+        with pytest.raises(ClientAuthenticationError, match="cancelled"):
+            run_cli(["-c", "import time; time.sleep(30)"], timeout=10, cancel_event=event)
+    finally:
+        timer.join(timeout=2)
+    assert time.monotonic() - started < 5
+    assert len(created) == 1
+    assert created[0].poll() is not None

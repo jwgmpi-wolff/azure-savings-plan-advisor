@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import threading
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -32,6 +34,36 @@ def context_id(value: str) -> str:
         raise ValueError("Enter a valid tenant or subscription GUID.") from exc
 
 
+def sign_in_failure(output: bytes | str | None) -> str:
+    text = output.decode("utf-8", errors="replace") if isinstance(output, bytes) else output or ""
+    codes = sorted(set(re.findall(r"\bAADSTS\d{4,9}\b", text)))[:3]
+    reference = f" ({', '.join(codes)})" if codes else ""
+    if "AADSTS90002" in codes:
+        return (
+            f"Azure directory was not found{reference}. This is a tenant-routing error, "
+            "not proof that your password is wrong or that sign-in was cancelled. "
+            "Use Switch Azure account to sign in without a tenant override, or enter a valid "
+            "tenant GUID for the active Azure cloud. A deleted directory or a tenant in another "
+            "Azure cloud cannot be used here. No app context was loaded."
+        )
+    if any(code in codes for code in ("AADSTS50020", "AADSTS50034", "AADSTS90072")) or (
+        "account" in text.lower() and "does not exist in tenant" in text.lower()
+    ):
+        return (
+            f"Azure sign-in failed: tenant/account mismatch{reference}. "
+            "The selected account does not belong to the requested directory. "
+            "Use Switch Azure account to choose the intended identity without the previous tenant, "
+            "or enter a tenant that the account can access. Guest membership requires approval "
+            "from that directory's administrator. No app context was loaded."
+        )
+    return (
+        f"Azure sign-in was cancelled or denied{reference}. Verify the intended account and tenant. "
+        "Use Switch Azure account to sign in without the previous tenant constraint. "
+        "Check organization Conditional Access policy if the correct account is still denied. "
+        "Raw authentication diagnostics are not displayed."
+    )
+
+
 class DesktopAzure:
     """Delegated CLI user identity only; never falls back to a hosting identity."""
 
@@ -43,12 +75,13 @@ class DesktopAzure:
         self.tenant_id = None
         self.subscriptions = []
 
-    def current_tenant(self) -> str:
+    def current_tenant(self, *, cancel_event: threading.Event | None = None) -> str:
         try:
             result = run_cli(
                 ["account", "show", "--query", "{tenantId:tenantId,userType:user.type}",
                  "--output", "json", "--only-show-errors"],
                 timeout=60,
+                cancel_event=cancel_event,
             )
             if result.returncode:
                 raise ConnectedProviderError("Sign in with Azure CLI as a user, then refresh context.")
@@ -59,7 +92,7 @@ class DesktopAzure:
             raise ConnectedProviderError("The desktop app requires an interactive user account, not a service principal or managed identity.")
         return context_id(account.get("tenantId"))
 
-    def sign_in(self, tenant_id: str) -> str:
+    def sign_in(self, tenant_id: str, *, cancel_event: threading.Event | None = None) -> str:
         tenant_id = context_id(tenant_id) if tenant_id else ""
         self.clear()
         try:
@@ -67,6 +100,7 @@ class DesktopAzure:
                 ["login", *(["--tenant", tenant_id] if tenant_id else []),
                  "--allow-no-subscriptions", "--output", "none", "--only-show-errors"],
                 timeout=300,
+                cancel_event=cancel_event,
                 env={
                     **os.environ,
                     "AZURE_CORE_LOGIN_EXPERIENCE_V2": "off",
@@ -74,13 +108,15 @@ class DesktopAzure:
                 },
             )
         except ClientAuthenticationError as exc:
-            raise ConnectedProviderError("Azure sign-in could not complete. Retry sign-in in the selected tenant.") from exc
+            raise ConnectedProviderError(str(exc)) from exc
         if result.returncode:
-            raise ConnectedProviderError(
-                "Azure sign-in was cancelled or denied. Check tenant membership and Conditional Access. "
-                "If necessary, run az login --tenant <tenant> in PowerShell, then use Refresh context."
-            )
-        current_tenant = self.current_tenant()
+            raise ConnectedProviderError(sign_in_failure(result.stderr))
+        if cancel_event is not None and cancel_event.is_set():
+            raise ConnectedProviderError("Azure sign-in cancelled. No app context was loaded.")
+        current_tenant = self.current_tenant(cancel_event=cancel_event)
+        if cancel_event is not None and cancel_event.is_set():
+            self.clear()
+            raise ConnectedProviderError("Azure sign-in cancelled. No app context was loaded.")
         self.tenant_id = tenant_id or current_tenant
         return self.tenant_id
 

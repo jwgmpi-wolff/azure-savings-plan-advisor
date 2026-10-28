@@ -14,11 +14,26 @@ sharing or deploying:
       presented as a price quote.
 - [ ] Keep connected Cost Management recommendations distinct from what-if
       and comparison estimates.
+- [ ] Approve local Ollama and the selected chat model, its license, hardware
+      requirements and handling of financial assumptions. Install/start Ollama
+      separately and verify a real in-app AI response using synthetic data.
+      No GitHub/Azure sign-in, API key or cloud quota is required for local AI.
+      Check unavailable/missing-model/timeout/truncated-response behavior,
+      cloud-model rejection and that no Azure identifiers or CSVs enter the
+      allowlisted prompt. Review local service logs and saved-export retention.
+      Do not expose Ollama to untrusted networks. Clearly identify this as
+      local AI, not Microsoft/GitHub Copilot or a configured approved agent.
 - [ ] For the Windows app, verify Azure CLI user sign-in, tenant switching,
       subscription membership filtering, and Advisor/Cost Management read RBAC.
       Connected desktop analysis must work without a CSV. Explain that CLI
       credentials are shared with the user's CLI and Disconnect only clears app
       context. The desktop does not require a separately deployed Function.
+- [ ] Test **Switch Azure account** separately from tenant-scoped sign-in.
+      Confirm a previous tenant/subscription selection is cleared before
+      account-wide authorization, and a denied scoped login never falls back
+      to another identity or directory. Guest membership requires administrator
+      approval; do not treat a cached token in another directory as a successful
+      validation of the intended target.
 - [ ] Verify read access for VM, VM scale set and App Service plan inventory.
       Distinguish current configured SKU/license evidence from historical usage,
       benefit eligibility, entitlement and actual discount/coverage. Plan-level

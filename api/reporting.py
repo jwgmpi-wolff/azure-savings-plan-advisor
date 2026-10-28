@@ -160,6 +160,19 @@ def build_report(result: dict[str, Any]) -> SavingsReport:
     records: list[dict[str, Any]] = []
     notices = [clean_text(result.get("notice"))] if result.get("notice") else []
     notices.extend(clean_text(item) for item in result.get("assumptions", []))
+    analysis = result.get("copilotAnalysis")
+    if analysis:
+        if analysis["status"] == "complete":
+            notices.extend([
+                f"{clean_text(analysis.get('source', 'AI'))} AI analysis "
+                f"(model: {clean_text(analysis.get('model', 'not recorded'))}) - generated {analysis['generatedAt']}; "
+                f"model calculated {analysis['modelCollectedAt']}. Verify against calculated reference figures.",
+                clean_text(analysis["explanation"]),
+            ])
+        elif analysis["status"] == "failed":
+            notices.append(f"AI analysis unavailable: {clean_text(analysis['error'])}")
+        else:
+            notices.append("AI analysis is pending; this export contains calculated reference figures only.")
     context: list[str] = []
     coverage: list[str] = []
     if connected:

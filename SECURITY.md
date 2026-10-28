@@ -62,6 +62,16 @@
   selection. Switching context invalidates results and exports. The Azure CLI's
   shared credential cache is managed by Azure CLI; disconnecting the app does
   not sign out other CLI users or sessions.
+  Switching Azure accounts is an explicit action that clears the app's selected
+  tenant/subscriptions and starts normal Azure CLI account-wide authorization
+  without a `--tenant` override. No alias is passed as a specific directory.
+  Scoped sign-in still honors the selected tenant and never silently
+  falls back to another directory or account. A cached token in one tenant is
+  not treated as proof of membership in a different tenant. Tenant-mismatch
+  failures surface only recognized `AADSTS` codes and fixed guidance, not raw
+  authentication descriptions containing personal or directory identifiers.
+  `AADSTS90002` is reported as tenant not found rather than cancellation,
+  account membership rejection or Conditional Access denial.
 - Multi-subscription collection validates every selection against the selected
   tenant before collecting. Each subscription retains independent Single-scope
   recommendations and source coverage; failed collections remain explicitly
@@ -70,19 +80,44 @@
   disconnected standard input, timeouts and hidden Windows process startup.
   Browser authentication and MFA are not suppressed. Token failures return
   fixed guidance rather than CLI output; token expiry uses the CLI's UTC epoch.
+  Windows MSI installations invoke the Azure CLI's Python runtime directly
+  rather than leaving a shell-owned login child behind. Interactive login
+  waits are cancellable, with a five-minute deadline; cancellation, timeout and
+  closing the app kill and reap only the owned CLI process. Closing a pending
+  login waits for cleanup before destroying the window. Sign-in remains in a
+  background worker; the UI displays elapsed time and browser/collection phases.
+  Cancellation does not undo authentication that already reached the shared CLI
+  cache, nor close a user-owned browser. The app does not silently clear credentials.
 - ARM pagination stays on the same HTTPS host and collection path. Redirects,
   loops, and cross-scope continuation links are rejected before forwarding tokens.
 - The app does not send telemetry or upload CSV files. Offline CSV modes remain
   separate from live recommendations, with no silent fallback on Azure failures.
 - The compute-hours modeler runs locally with explicit user-entered financial
   assumptions; it does not retrieve pricing or claim live Azure validation.
-  Its break-even explanations are calculation-based, not AI-generated.
-  Copy for Copilot writes only the current modeled inputs, calculated results
-  and limitations to the system clipboard, after an explicit user action.
-  No AI endpoint is called. Clipboard content is financial data and may be
-  accessible to clipboard history/sync or other applications; review it before
-  pasting into an approved service. App input changes invalidate the handoff,
-  but do not erase an already copied prompt or saved exports.
+  Modeler is now the initial desktop mode. Running a modeler report calls a
+  local Ollama chat model, not GitHub or Microsoft Copilot, and displays the
+  actual AI explanation separately from calculated reference figures.
+  The UI discloses the local connection. Only allowlisted model inputs and
+  calculated financial figures go to `http://127.0.0.1:11434`; Azure identifiers,
+  CSVs, inventory and arbitrary report text are excluded. There are no tools,
+  MCP servers, file access, cloud credentials or inherited project instructions.
+  Cloud-tagged models and metadata identifying a remote model are rejected;
+  local model metadata and chat capability are required before figures are sent.
+  HTTP proxies, netrc credential discovery and redirects are disabled.
+  No model is downloaded and no service is started automatically by the app.
+  Trust and secure the local service; follow organization policy for local
+  weights, service logs and exports. Keep Ollama restricted to trusted local use.
+  Inference uses a 150-second read timeout and a short connection timeout;
+  local-model verification has a separate shorter timeout.
+  Errors do not expose raw HTTP diagnostics or substitute deterministic guidance
+  for AI output. Empty, incomplete, truncated, tool-call and unexpected-model
+  replies are rejected. Stale responses are discarded when inputs change.
+  AI responses and exports use the shared credential redactor and record the
+  provider, model and timestamps. AI text can be incorrect and must be checked
+  against the calculated references.
+  Input changes clear in-app analysis, not saved exports or local service logs.
+  Closing the app does not terminate a shared Ollama service. No approved
+  Microsoft agent connection is claimed without its actual configuration.
 - Input files are read locally; results are written only to the JSON export
   location selected by the user. Protect these files as financial data.
 - Connected exports intentionally include selected tenant/subscription context

@@ -1,14 +1,44 @@
 # Azure Savings Plan Advisor
 
-**Windows app:** [Get the Windows x64 app installer from this repository](downloads/windows/AzureSavingsPlanAdvisor-0.7.2-Setup-x64.exe).
+**Version 0.9.0: direct local AI, no sign-in required.** The Windows app starts
+in **modeler** mode, calculates break-even reference figures, and connects to
+**Ollama on this PC** for an actual AI-generated explanation inside the app.
+The default model is **`llama3.1:8b`**. No GitHub/Azure login, API key, cloud
+usage quota, CSV or clipboard handoff is needed for this workflow.
+This is **local AI, not Microsoft or GitHub Copilot**. Ollama and a suitable
+local model must be installed separately; see [local AI setup](#direct-local-ai-analysis).
+
+**New PC without Ollama:** The app can calculate and export the financial
+reference figures, but **cannot generate an AI explanation** until Ollama and
+a local chat model are installed and running. The Windows installer is not a
+self-contained AI installation and has **no cloud AI fallback**. Windows
+Copilot being installed or licensed does not configure an inference endpoint
+for this app.
+
+**Get the current version:** [Build the 0.9.0 Windows installer](#build-the-windows-installer-from-source)
+or [run from source](#direct-local-ai-analysis). The build creates
+`dist\installer\AzureSavingsPlanAdvisor-0.9.0-Setup-x64.exe` and its checksum.
+The 0.9.0 installer has not been published at the historical download links below.
+
+**Legacy Windows download (0.7.2; no local AI):** [Get the older Windows x64 app installer](downloads/windows/AzureSavingsPlanAdvisor-0.7.2-Setup-x64.exe).
 Open the file and select **Download raw file** on GitHub, or run it from your
 local clone. [Verify its SHA-256 checksum](downloads/windows/SHA256SUMS.txt).
 For API development, see [prerequisite installers](#windows-installers)
 and [local development](#local-development).
 
-A Copilot Studio-ready planning API backed by a Python Azure Function. It keeps
-the conversation separate from financial calculations and connected
-recommendations:
+The desktop separates tested financial arithmetic from the AI explanation:
+
+```text
+Windows app -> deterministic planning model -> break-even figures and charts
+            -> local Ollama chat model     -> in-app AI explanation
+```
+
+Azure sign-in is needed **only** for optional **connected** mode, which reads
+authoritative Azure recommendations. Local AI does not retrieve or validate live
+Azure prices, eligibility or recommendations.
+
+A separate Copilot Studio-ready planning API backed by a Python Azure Function
+is also included. Its deployment path is independent of the desktop's local AI:
 
 ```text
 User -> Copilot Studio -> Entra-authenticated REST API -> Azure Function
@@ -31,31 +61,87 @@ Android may require approval to install apps from this download source. Debug AP
 
 ## Install the Windows app
 
-1. Open [the installer checked into this repository](downloads/windows/AzureSavingsPlanAdvisor-0.7.2-Setup-x64.exe)
-   and select **Download raw file**, or use the copy under `downloads\windows`
-   in your local clone. The same installer is also available in
-   [the repository downloads folder](downloads/windows).
-   Sign into GitHub with repository access; this repository is private.
+1. Use the **0.9.0** installer produced by
+   [building from source](#build-the-windows-installer-from-source):
+   `dist\installer\AzureSavingsPlanAdvisor-0.9.0-Setup-x64.exe`.
+   The checked-in and published **0.7.2** installers are historical and do not
+   include the local AI connection.
 2. Run the installer on Windows 10/11 x64. It installs for your current user,
    creates a Start menu shortcut, and optionally creates a desktop shortcut.
    Python is bundled. Node.js and Functions Core Tools are **not required**.
-   Install [Azure CLI for Windows](https://aka.ms/installazurecliwindows) for
-   Azure-connected features, then restart the app so it can find `az`.
-3. Open **Azure Savings Plan Advisor** from Start. **Connected** is the default.
-   Select **Sign in / switch tenant** and complete Entra sign-in in your browser.
-   Leave the tenant blank for initial sign-in, or enter/select an approved tenant
-   GUID to switch directories, including guest directories.
-4. Select one or more accessible subscriptions using Ctrl/Shift, or **Select all shown**.
+3. Install/start [Ollama for Windows](https://ollama.com/download/windows) and
+   make sure `ollama list` includes `llama3.1:8b`, or another approved installed
+   local chat model. See [local AI setup](#direct-local-ai-analysis) for commands.
+   The installer does **not** bundle Ollama or model weights.
+4. Open **Azure Savings Plan Advisor** from Start. Keep **modeler** selected,
+   enter your financial assumptions and the installed local model name, then
+   select **Run report**. Do not sign in to Azure or GitHub for local AI.
+5. Review the calculated figures and charts, then **AI analysis** for the
+   returned explanation. Model loading/inference can take time; the window
+   remains usable while the request runs. **Ask AI** retries the current model.
+   Verify AI statements against the calculated references before acting.
+6. Use **Executive PDF**, **Executive PowerPoint**, **Export CSV** or **JSON**
+   to save your current results, including the AI response and its provenance
+   when available.
+
+### Optional: connect to Azure for live recommendations
+
+Local modeling and AI do not require these steps.
+
+1. Install [Azure CLI for Windows](https://aka.ms/installazurecliwindows),
+   then restart the app so it can find `az`.
+2. Select **connected** mode.
+   Select **Switch Azure account** to choose an identity in your browser without
+   reusing a previously selected tenant. This explicitly clears the app's tenant,
+   subscriptions and results, but does not clear the shared CLI account cache.
+   The initial authorization omits `--tenant`, using the Azure CLI's normal
+   account-wide discovery; the app does not choose an account for you. Passing
+   an alias such as `organizations` explicitly would instead force CLI
+   tenant-specific subscription discovery. After sign-in, select an accessible
+   directory and subscriptions.
+   To sign in to a specific directory, enter/select its approved tenant GUID and
+   select **Sign in to selected tenant**. That action intentionally preserves
+   the tenant constraint, including when you need an approved guest directory.
+   The sign-in status shows elapsed time while waiting for the browser, with
+   a five-minute limit and **Cancel sign-in**. Cancelling or closing the app
+   stops its pending login process; it does not sign out or clear shared CLI
+   credentials. Close any unused browser sign-in page yourself.
+   If no browser appears, cancel, run `az login` in PowerShell, and select
+   **Refresh context**. Browser sign-in and tenant/subscription discovery are
+   shown as separate steps so a network wait is not mistaken for a frozen app.
+3. Select one or more accessible subscriptions using Ctrl/Shift, or **Select all shown**.
    Filter by name or ID; selections remain selected when hidden by the filter.
    **Clear selections** clears all selected subscriptions, including hidden ones.
    Choose P1Y/P3Y and the lookback, then select **Run report**.
    **No CSV or assumed discount is required.**
-5. Review the **Executive dashboard** for summary cards, savings-percentage
+4. Review the **Executive dashboard** for summary cards, savings-percentage
    bars, hourly commitment charts and the combined recommendation table;
    **Evidence & details** includes the
    assumptions, warnings and underlying Azure values.
-6. Use **Executive PDF**, **Executive PowerPoint**, **Export CSV** or **JSON**
+5. Use **Executive PDF**, **Executive PowerPoint**, **Export CSV** or **JSON**
    to save your current results.
+
+### Account does not exist in the requested tenant
+
+This is an account/directory mismatch, not evidence that a password or usage
+allowance is wrong. Cancel the waiting sign-in and use **Switch Azure account**
+to remove the previous tenant restriction, then select the intended identity.
+Alternatively, enter a directory that the intended account can access and use
+**Sign in to selected tenant**. A valid cached CLI session in one directory
+does not prove access to a different directory.
+
+The app surfaces recognized `AADSTS` error codes and safe guidance, not raw CLI
+output containing account names, directory IDs or credentials. If the intended
+directory requires guest membership, its administrator must approve that access.
+The app never creates guest accounts, changes role assignments, silently chooses
+another account, or retries a different tenant after a scoped sign-in failure.
+
+`AADSTS90002` specifically means **tenant not found**, not that the password is
+incorrect or the user cancelled. Use **Switch Azure account** to remove the
+tenant override, or verify the tenant GUID and active Azure cloud for scoped
+sign-in. A deleted directory or a tenant in a different Azure cloud is not
+repaired by switching passwords, adding guest membership or changing
+Conditional Access policy. The app does not change the active cloud for you.
 
 ### Executive dashboard and exports
 
@@ -202,6 +288,8 @@ nor Azure sign-in is required:
 - Your **eligible PAYG rate per running hour**, **assumed Savings Plan discount**,
   **hourly monetary commitment**, **currency**, and **P1Y/P3Y term**.
   No price, discount, or commitment is guessed or fetched automatically.
+- The **installed local Ollama model** name, default `llama3.1:8b`, for the
+  separate AI explanation. GitHub usernames and API keys are not requested.
 
 The dashboard shows projected period savings or loss, break-even running hours,
 whether break-even is attainable, and a table of the selected model plus
@@ -238,13 +326,107 @@ produce 900 USD PAYG versus 800 USD modeled cost, 100 USD period savings,
 80 USD unused commitment, and 80 break-even running hours. At only 50 running
 hours the same commitment produces a 300 USD loss.
 
-**Copilot handoff:** on-screen guidance is deterministic and explicitly labeled
-**calculation-based, not Copilot-generated**. **Copy for Copilot** copies a prompt
-with the calculated model, break-even figures and limitations. Paste it into your
-approved Copilot service for an AI explanation. This app does not connect to or
-send data to Copilot automatically; no AI endpoint or secret is configured.
-Clipboard contents contain financial inputs and estimates; review before sharing.
-Editing any input disables stale exports and the handoff until the model is rerun.
+To verify the connection, enter those synthetic inputs with currency **USD**
+and term **P1Y**, then **Run report**. The calculated reference must show
+**80 hours / 80% break-even** and **100 USD savings**. An actual model response
+should appear in **AI analysis**, labeled **Ollama (local)** with its model name
+and timestamps. A local calculation alone, a pending status or an error is not
+proof that AI inference succeeded. This synthetic scenario was also exercised
+through the desktop against the running local model during 0.9.0 validation.
+
+### Direct local AI analysis
+
+**Modeler** is the initial mode. **Run report** automatically calls the selected
+installed **Ollama** model and displays its returned break-even explanation in
+**AI analysis**. This is local AI, not Microsoft/GitHub Copilot.
+There is no clipboard handoff. **Ask AI** retries the request for the current
+model. Local calculations remain the tested financial reference; the separately
+labeled AI response explains the break-even hours/percentage, savings or loss,
+idle-hour commitment risk, uncovered PAYG and limitations.
+
+Install [Ollama for Windows](https://ollama.com/download/windows) using your
+organization's approved process. Start Ollama and install a suitable local chat
+model if one is not already present. The default is `llama3.1:8b`; hardware must
+have sufficient memory for it. No model or runtime is downloaded automatically
+by the app. Internet access may be needed for initial installation/downloads,
+but local analysis requires no cloud credentials, subscription or quota.
+
+#### What happens on a new Windows laptop or desktop?
+
+| Target PC | Available behavior |
+| --- | --- |
+| No Ollama installed or running | Reference calculations, charts and exports work. The AI request reports that Ollama is unavailable; no AI explanation is generated. |
+| Ollama running, but selected model missing | Reference calculations remain available. Install an approved local chat model and select its exact name before retrying AI. |
+| Ollama and a supported local model ready | Both calculations and actual in-app AI explanations are available, subject to sufficient hardware resources. |
+
+Installing the advisor alone does not install Ollama, download weights or
+provision a cloud service. For PCs where local inference is not permitted or
+practical, a cloud-backed version would need a separately implemented,
+organization-approved AI endpoint and authentication flow. **That cloud
+connection is not implemented in 0.9.0.** Do not distribute this installer as
+providing out-of-the-box AI on every Windows PC.
+
+Prerequisites and source execution (Python 3.11+; Python is bundled in installers):
+
+```powershell
+ollama list
+# Only if approved and not already installed (downloads model weights):
+ollama pull llama3.1:8b
+# Start the Ollama Windows application, or run ollama serve if it is not running.
+python -m pip install -r requirements-windows.txt
+python .\desktop_app.py
+```
+
+In the modeler, enter the exact installed local chat model name from
+`ollama list`, then your financial assumptions and **Run report**. The first
+request may take longer while the weights load. The app checks local model
+metadata before sending the financial prompt; cloud/remote models, including
+`:cloud` models, are rejected. There is no automatic cloud fallback.
+
+The app posts only allowlisted numeric financial inputs, currency/term and
+calculated results to the fixed loopback endpoint `http://127.0.0.1:11434`.
+It does **not** send Azure tenant/subscription identifiers, inventory, raw CSVs,
+previous explanations or arbitrary report text. HTTP proxies, netrc credentials
+and redirects are disabled for this connection. The request has no tools,
+MCP servers, file access or project instructions. The local service must be
+trusted; follow organization policy for local models, service logs and saved
+exports. Do not expose Ollama to untrusted networks.
+
+Unavailable services/models, unsupported models, invalid responses, redirects,
+timeouts and incomplete/truncated responses are explicit failures, not
+deterministic text disguised as AI output. Check that Ollama is running and
+that the model fits the PC's memory, then **Ask AI** to retry. The inference
+read timeout is 150 seconds; connecting and local-model verification have
+separate shorter timeouts. Reference calculations and exports remain available.
+Responses include service, selected model, generation time and calculation
+timestamp in JSON and PDF/PowerPoint/CSV report notices. The existing JSON
+`copilotAnalysis` property is retained for compatibility, but its `source` and
+`model` identify local Ollama rather than Copilot. AI text uses the shared
+credential redactor. AI explanations can still contain mistakes: verify them
+against the reference figures. Neither local AI nor this model verifies Azure
+eligibility or live rates.
+
+Editing inputs clears the explanation and disables stale exports until rerun.
+Responses for an older input state are discarded, not attached to the new report.
+Connected Azure reports and CSV modes retain their existing behavior; they do
+not call AI. To stop local AI inference, close the app and manage Ollama using
+its own controls. Closing does not stop a shared Ollama service. Changing inputs
+or closing the app does not delete saved exports or local service logs.
+Connecting a specific approved Microsoft Copilot agent still requires its
+published client endpoint and approved authentication configuration; no such
+connection is claimed or silently substituted.
+
+#### Local AI troubleshooting
+
+| Symptom | Action |
+| --- | --- |
+| Cannot connect to local Ollama | Start the Ollama Windows application, or run `ollama serve` in a separate PowerShell window if it is not already running. Retry **Ask AI**. |
+| Selected model is not installed | Run `ollama list` and enter an exact installed chat-model name. If permitted, `ollama pull llama3.1:8b` downloads the default model. |
+| Cloud/remote model is rejected | Choose an installed local model. Cloud inference and automatic cloud fallback are intentionally disabled. |
+| Request times out or is incomplete | Check available memory and Ollama status; try another approved installed local chat model and rerun. The inference read timeout is 150 seconds. |
+| Azure or GitHub login is shown as required for AI | Verify that you launched the updated 0.9.0 app in **modeler** mode, not an older installed copy. Connected Azure analysis has a separate sign-in flow. |
+| No AI response for connected/CSV reports | Expected: only **modeler** reports request a local AI explanation. |
+
 Validate actual eligibility, rate, discount and Azure recommendations before
 making a purchase decision. Taxes, licensing, ineligible charges and consumption
 of unused commitment by other workloads are outside this single-workload model.
@@ -262,10 +444,12 @@ Use Windows x64 with Python 3.11 and [Inno Setup 6](https://jrsoftware.org/isdl.
 From the project directory:
 
 ```powershell
+py -3.11 -m venv .venv
+if ($LASTEXITCODE -ne 0) { throw 'Virtual environment creation failed.' }
 .\.venv\Scripts\python.exe -m pip install -r requirements-windows.txt
 if ($LASTEXITCODE -ne 0) { throw 'Windows build dependency installation failed.' }
-.\scripts\Build-WindowsInstaller.ps1 -Python .\.venv\Scripts\python.exe -Version 0.7.2
-.\scripts\Test-WindowsInstaller.ps1 -Installer .\dist\installer\AzureSavingsPlanAdvisor-0.7.2-Setup-x64.exe
+.\scripts\Build-WindowsInstaller.ps1 -Python .\.venv\Scripts\python.exe -Version 0.9.0
+.\scripts\Test-WindowsInstaller.ps1 -Installer .\dist\installer\AzureSavingsPlanAdvisor-0.9.0-Setup-x64.exe
 ```
 
 The installer and checksum are written under `dist\installer`. The Windows
@@ -273,9 +457,10 @@ installer workflow also builds, tests installation/application launch/uninstall,
 and publishes these files when a version tag is pushed, when hosted runners
 are permitted. This repository's enterprise policy currently disables hosted
 runners; an enterprise administrator must enable them or provide an approved
-runner. Version 0.7.2 adds a separate Log tab for per-subscription collection
-warnings, keeping results and exports free of repeated diagnostic entries.
-Live collection still requires validation with the intended tenant, selected
+runner. Version 0.9.0 starts in modeler mode and uses local Ollama instead of the
+GitHub Copilot SDK; the app no longer requests a GitHub username for AI.
+Ollama and model weights must be installed separately on each target PC.
+Live Azure collection still requires validation with the intended tenant, selected
 subscriptions and RBAC.
 The install/uninstall smoke test requires a separate Windows test user if the
 app is already installed; it deliberately refuses to modify an existing install.
@@ -590,6 +775,9 @@ operation.
   amounts; this service does not query, infer, aggregate, or interpolate usage.
 - Connected recommendations depend on Azure API availability, the signed-in
   user's delegated permissions, and supported billing scopes.
+- Local AI requires a running Ollama service and an installed local chat model
+  that fits the PC's hardware. Its explanations can contain mistakes and do not
+  replace the calculated references or authoritative Azure recommendations.
 
 ## Copyright
 

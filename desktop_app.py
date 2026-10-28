@@ -4,6 +4,7 @@ import json
 import logging
 import queue
 import threading
+import time
 import tkinter as tk
 from collections.abc import Callable
 from pathlib import Path
@@ -12,7 +13,8 @@ from tkinter.scrolledtext import ScrolledText
 from typing import Any
 
 from api.calculator import calculate_comparison, calculate_forecast
-from api.compute_modeler import calculate_compute_model, copilot_prompt
+from api.compute_modeler import calculate_compute_model
+from api.copilot_provider import AI_SOURCE, DEFAULT_MODEL, CopilotError, explain_model
 from api.csv_parser import MAX_CSV_BYTES, parse_hourly_cost_csv
 from api.models import ForecastRequest, validate_request
 from api.azure_provider import ConnectedProviderError
@@ -56,7 +58,7 @@ def format_result(result: dict[str, Any]) -> str:
             f"Projected full-term modeled cost: {result['projectedTermModeledCost']:,.2f} {result['currencyCode']}",
             f"Projected full-term net savings: {result['projectedTermSavings']:,.2f} {result['currencyCode']}",
             "Full-term projection repeats the supplied duty cycle and rates; it is not a forecast.",
-            "", "BREAK-EVEN GUIDANCE (calculation-based, not Copilot-generated)",
+            "", "CALCULATED BREAK-EVEN REFERENCE (calculation-based)",
             *result["guidance"], "", "ASSUMPTIONS",
             *result["assumptions"],
         ])
@@ -152,6 +154,9 @@ class AdvisorWindow:
         self.report: SavingsReport | None = None
         self.azure = DesktopAzure()
         self.busy = False
+        self.login_cancel_event: threading.Event | None = None
+        self.login_started_at = 0.0
+        self.closing = False
         self.events: queue.Queue[tuple[Callable[[Any], None], Any, str | None]] = queue.Queue()
         self.subscription_ids: dict[str, str] = {}
         self.selected_subscription_ids: set[str] = set()
@@ -176,12 +181,12 @@ class AdvisorWindow:
         )
         ttk.Label(
             frame,
-            text="Read Azure recommendations for existing workloads. CSV is optional, for offline modeling only.",
+            text="Get a local AI break-even explanation without signing in. Connected Azure recommendations are optional.",
             background=PALE,
             wraplength=700,
         ).grid(row=1, column=0, columnspan=3, sticky="w")
         self.values: dict[str, tk.StringVar] = {}
-        self.values["mode"] = tk.StringVar(value="connected")
+        self.values["mode"] = tk.StringVar(value="modeler")
         mode = ttk.Combobox(
             frame, textvariable=self.values["mode"], state="readonly",
             values=("connected", "modeler", "what-if", "comparison"),
@@ -193,7 +198,7 @@ class AdvisorWindow:
         self.azure_frame.grid(row=3, column=0, columnspan=3, sticky="ew")
         self.azure_frame.columnconfigure(1, weight=1)
         azure_fields = [
-            ("tenantId", "Tenant GUID (blank for initial sign-in)", None, ""),
+            ("tenantId", "Tenant GUID (blank = choose account first)", None, ""),
             ("azureTerm", "Savings Plan term", ("P1Y", "P3Y"), "P1Y"),
             ("lookback", "Lookback period", ("Last7Days", "Last30Days", "Last60Days"), "Last30Days"),
         ]
@@ -237,19 +242,29 @@ class AdvisorWindow:
         self.values["tenantId"].trace_add("write", self.invalidate_context)
         for key in ("azureTerm", "lookback"):
             self.values[key].trace_add("write", self.invalidate_result)
-        for column, (label, action) in enumerate([
-            ("Sign in / switch tenant", self.sign_in),
+        login_actions = ttk.Frame(self.azure_frame)
+        login_actions.grid(row=4, column=0, columnspan=4, sticky="w", pady=8)
+        for label, action in [
+            ("Sign in to selected tenant", self.sign_in),
+            ("Switch Azure account", self.switch_account),
             ("Refresh context", self.refresh_context),
             ("Disconnect app", self.disconnect),
-        ]):
-            button = ttk.Button(self.azure_frame, text=label, command=action)
-            button.grid(row=4, column=column, pady=8, padx=3)
+        ]:
+            button = ttk.Button(login_actions, text=label, command=action)
+            button.pack(side="left", padx=3)
             self.context_controls.append(button)
+        self.cancel_login_button = ttk.Button(
+            login_actions, text="Cancel sign-in", command=self.cancel_sign_in, state="disabled",
+        )
+        self.cancel_login_button.pack(side="left", padx=3)
         ttk.Label(
             self.azure_frame, wraplength=750,
             text="Tenant switching clears previous results. Select subscriptions after refresh. "
+                 "Switch Azure account clears the tenant restriction before opening account selection. "
                  "Sign-in opens your browser; Azure CLI must be installed. Disconnect clears app context, not the CLI account cache.",
-        ).grid(row=5, column=0, columnspan=3, sticky="w")
+        ).grid(row=5, column=0, columnspan=4, sticky="w")
+        self.login_status = ttk.Label(self.azure_frame, text="", wraplength=950)
+        self.login_status.grid(row=6, column=0, columnspan=4, sticky="w", pady=4)
         self.offline_frame = ttk.LabelFrame(frame, text="Optional offline CSV modeling", padding=8)
         self.offline_frame.grid(row=3, column=0, columnspan=3, sticky="ew")
         self.offline_frame.columnconfigure(1, weight=1)
@@ -276,7 +291,7 @@ class AdvisorWindow:
             variable.trace_add("write", self.invalidate_result)
         ttk.Button(self.offline_frame, text="Browse...", command=self.browse).grid(row=0, column=2, padx=(8, 0))
         self.offline_frame.grid_remove()
-        self.modeler_frame = ttk.LabelFrame(frame, text="Compute-hours modeler (no CSV or sign-in required)", padding=12)
+        self.modeler_frame = ttk.LabelFrame(frame, text="Compute-hours modeler & local AI analysis (no sign-in or CSV)", padding=12)
         self.modeler_frame.grid(row=3, column=0, columnspan=3, sticky="ew")
         self.modeler_frame.columnconfigure(1, weight=1)
         modeler_fields = [
@@ -287,9 +302,10 @@ class AdvisorWindow:
             ("modelCommitment", "Hourly monetary commitment (paid even while idle)", None),
             ("modelCurrency", "Currency code (e.g. USD)", None),
             ("modelTerm", "Plan term (full obligation still applies)", ("P1Y", "P3Y")),
+            ("aiModel", "Installed local Ollama model (see ollama list)", None),
         ]
         for row, (key, label, choices) in enumerate(modeler_fields):
-            variable = tk.StringVar()
+            variable = tk.StringVar(value=DEFAULT_MODEL if key == "aiModel" else "")
             self.values[key] = variable
             ttk.Label(self.modeler_frame, text=label).grid(row=row, column=0, sticky="w", padx=(0, 12), pady=3)
             widget = (
@@ -303,7 +319,11 @@ class AdvisorWindow:
             text="Enter your own rate, discount and commitment; no prices are invented. "
                  "Compute hours are runtime, not elapsed billing hours. One constant-rate workload only. "
                  "Use a period that represents its duty cycle. Results include idle-hour cost and uncovered PAYG. "
-                 "Guidance is calculated locally; Copy for Copilot only copies a prompt and does not send data.",
+                 "Run report asks the selected local Ollama model for an in-app break-even explanation. "
+                 "This is local AI, not Microsoft or GitHub Copilot. No sign-in or API key is required. "
+                 "Ollama must be running on this PC with the model installed. Cloud models are blocked. "
+                 "Only financial assumptions and calculated figures are sent to the local service; "
+                 "Azure account details, CSV files and workload inventory are excluded.",
         ).grid(row=len(modeler_fields), column=0, columnspan=2, sticky="w", pady=8)
         self.modeler_frame.grid_remove()
         actions = ttk.LabelFrame(frame, text="Report scope & executive exports", padding=10)
@@ -318,7 +338,7 @@ class AdvisorWindow:
             self.export_buttons.append(button)
         self.save_button = ttk.Button(actions, text="JSON", command=self.save, state="disabled")
         self.save_button.pack(side="left", padx=8)
-        self.copilot_button = ttk.Button(actions, text="Copy for Copilot", command=self.copy_for_copilot, state="disabled")
+        self.copilot_button = ttk.Button(actions, text="Ask AI", command=self.ask_copilot, state="disabled")
         self.copilot_button.pack(side="left", padx=4)
         results = ttk.LabelFrame(frame, text="Results", padding=8)
         results.grid(row=5, column=0, columnspan=3, sticky="nsew")
@@ -343,12 +363,29 @@ class AdvisorWindow:
         )
         self.log_output.pack(fill="both", expand=True)
         self.tabs.add(self.log_tab, text="Log")
+        self.copilot_events: queue.Queue[tuple[int, dict[str, str] | None, str | None]] = queue.Queue()
+        self.copilot_generation = 0
+        self.copilot_busy = False
+        self.copilot_tab = ttk.Frame(self.tabs)
+        self.copilot_output = ScrolledText(
+            self.copilot_tab, wrap="word", font=("Segoe UI", 10), state="disabled",
+            background="white", foreground=NAVY, relief="flat", height=26,
+        )
+        self.copilot_output.pack(fill="both", expand=True)
+        self.tabs.add(self.copilot_tab, text="AI analysis")
+        self.set_copilot_output("Run a compute-hours model to get a break-even explanation from local Ollama.")
         self.set_log("No collection log. Run a report for the current context.")
         self.tabs.select(detail_frame)
+        self.change_mode()
         self.set_output(
-            "Azure-connected analysis is the default. No hourly-cost CSV is required.\n\n"
-            "Select Sign in / switch tenant to open Entra sign-in.\n"
-            "For tenant switching, select or enter your approved tenant GUID first.\n"
+            "Compute-hours modeling with local AI is the default. No Azure or GitHub sign-in is required.\n\n"
+            "Enter your elapsed hours, runtime, PAYG rate, assumed discount, hourly commitment, currency "
+            "and term. Run report calculates the reference figures and asks local Ollama to explain "
+            "break-even and savings or loss in the AI analysis tab.\n"
+            "Keep Ollama running and select an installed local chat model (default: llama3.1:8b).\n\n"
+            "For live Azure recommendations, choose connected mode. No hourly-cost CSV is required.\n"
+            "Select Switch Azure account to choose an identity without a previous tenant restriction.\n"
+            "To sign in to a specific directory, select or enter your approved tenant GUID and use Sign in to selected tenant.\n"
             "Use Refresh context if you already signed in with Azure CLI.\n"
             "Select one or more accessible subscriptions, term, and lookback, then Run report.\n\n"
             "The app reads Azure Advisor Cost recommendations and Azure Cost Management "
@@ -357,11 +394,16 @@ class AdvisorWindow:
             "For optional offline analysis, choose what-if or comparison and supply a CSV."
         )
         root.report_callback_exception = self.callback_error
+        root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.after(100, self.poll_events)
 
     def invalidate_result(self, *_args: Any) -> None:
         self.result = None
         self.report = None
+        if hasattr(self, "copilot_generation"):
+            self.copilot_generation += 1
+            self.copilot_busy = False
+            self.set_copilot_output("Inputs changed. Run a compute-hours report for a new AI analysis.")
         if hasattr(self, "save_button"):
             self.save_button.configure(state="disabled")
             self.copilot_button.configure(state="disabled")
@@ -460,30 +502,106 @@ class AdvisorWindow:
         threading.Thread(target=worker, daemon=True).start()
 
     def poll_events(self) -> None:
+        if self.busy and self.login_cancel_event is not None:
+            elapsed = int(time.monotonic() - self.login_started_at)
+            self.login_status.configure(text=(
+                "Cancelling Azure sign-in..."
+                if self.login_cancel_event.is_set() else
+                f"Waiting for browser sign-in ({elapsed}s; 5-minute limit). "
+                "The app is responsive. Finish sign-in in your browser, or select Cancel sign-in. "
+                "If no browser opens, cancel and run az login in PowerShell, then Refresh context."
+            ))
         try:
             done, value, error = self.events.get_nowait()
         except queue.Empty:
             pass
         else:
             self.busy = False
+            cancelled = self.login_cancel_event is not None and self.login_cancel_event.is_set()
+            self.login_cancel_event = None
+            self.cancel_login_button.configure(state="disabled")
+            self.login_status.configure(text="")
             for control, state in zip(self.context_controls, self.control_states):
                 control.configure(state=state)
-            if error:
+            if cancelled or self.closing:
+                self.azure.clear()
+                self.set_log("Azure sign-in cancelled. App context was not loaded. CLI account cache may have changed.")
+                self.set_output(
+                    "Azure sign-in cancelled. You can retry, or run az login in PowerShell and select Refresh context. "
+                    "Close any unused browser sign-in page. The CLI account cache is not cleared."
+                )
+            elif error:
                 self.set_log(error)
                 self.set_output(error)
                 messagebox.showerror("Azure operation failed", error, parent=self.root)
             else:
                 done(value)
+        try:
+            generation, analysis, error = self.copilot_events.get_nowait()
+        except queue.Empty:
+            pass
+        else:
+            if generation == self.copilot_generation and self.result is not None:
+                self.copilot_busy = False
+                self.copilot_button.configure(state="normal")
+                if error:
+                    analysis = {**self.result.get("copilotAnalysis", {}), "status": "failed", "source": AI_SOURCE, "error": error}
+                    self.set_copilot_output(f"AI REQUEST FAILED\n\n{error}")
+                    messagebox.showerror("AI request failed", error, parent=self.root)
+                elif analysis is not None:
+                    self.set_copilot_output(
+                        f"AI BREAK-EVEN ANALYSIS\nSource: {analysis['source']} | Model: {analysis['model']}\n"
+                        f"Generated: {analysis['generatedAt']}\n"
+                        f"Model calculated: {analysis['modelCollectedAt']}\n\n{analysis['explanation']}\n\n"
+                        "AI-generated explanation; verify against the calculated reference figures before acting."
+                    )
+                self.result["copilotAnalysis"] = analysis
+                self.report = build_report(self.result)
+                self.dashboard.show(self.report)
         self.root.after(100, self.poll_events)
 
     def sign_in(self) -> None:
+        if self.busy:
+            return
         tenant = self.values["tenantId"].get().strip()
         self.invalidate_context()
+        cancel_event = threading.Event()
+        self.login_cancel_event = cancel_event
+        self.login_started_at = time.monotonic()
 
-        def work() -> dict[str, Any]:
-            signed_in_tenant = self.azure.sign_in(tenant)
-            return self.azure.refresh(signed_in_tenant)
-        self.run_task(work, self.context_loaded, "Complete Azure Entra sign-in in your browser. Waiting for sign-in...")
+        def signed_in(signed_in_tenant: str) -> None:
+            self.run_task(
+                lambda: self.azure.refresh(signed_in_tenant), self.context_loaded,
+                "Azure sign-in completed. Discovering accessible tenants and subscriptions; this is a separate network operation...",
+            )
+            self.login_status.configure(text="Azure sign-in completed. Loading tenants and subscriptions...")
+
+        self.run_task(
+            lambda: self.azure.sign_in(tenant, cancel_event=cancel_event),
+            signed_in, "Complete Azure Entra sign-in in your browser. Waiting for sign-in...",
+        )
+        self.cancel_login_button.configure(state="normal")
+
+    def switch_account(self) -> None:
+        if self.busy:
+            return
+        self.values["tenantId"].set("")
+        self.tenant_combo.configure(values=())
+        self.sign_in()
+
+    def cancel_sign_in(self) -> None:
+        if self.login_cancel_event is not None:
+            self.login_cancel_event.set()
+            self.cancel_login_button.configure(state="disabled")
+            self.login_status.configure(text="Cancelling Azure sign-in...")
+
+    def close(self) -> None:
+        self.closing = True
+        if self.login_cancel_event is not None and self.busy:
+            self.cancel_sign_in()
+            self.root.after(100, self.close)
+            return
+        self.root.destroy()
 
     def refresh_context(self) -> None:
         tenant = self.values["tenantId"].get().strip()
@@ -507,6 +625,9 @@ class AdvisorWindow:
         )
 
     def show_result(self, result: dict[str, Any]) -> None:
+        self.copilot_generation += 1
+        self.copilot_busy = False
+        self.set_copilot_output("No AI analysis for this report. Use Ask AI for a compute-hours model.")
         result = redacted_result(result)
         report = build_report(result)
         warnings = collection_warnings(result) if result["mode"] == "connected" else ()
@@ -583,6 +704,7 @@ class AdvisorWindow:
                 messagebox.showerror("Modeling failed", str(exc), parent=self.root)
                 return
             self.show_result(result)
+            self.ask_copilot()
             return
         if self.values["mode"].get() == "connected":
             tenant = self.values["tenantId"].get().strip()
@@ -632,24 +754,45 @@ class AdvisorWindow:
             return
         self.show_result(result)
 
-    def copy_for_copilot(self) -> None:
+    def set_copilot_output(self, text: str) -> None:
+        self.copilot_output.configure(state="normal")
+        self.copilot_output.delete("1.0", "end")
+        self.copilot_output.insert("1.0", clean_text(text))
+        self.copilot_output.configure(state="disabled")
+
+    def ask_copilot(self) -> None:
         if self.result is None or self.result["mode"] != "modeler" or self.busy:
             messagebox.showerror(APP_TITLE, "Run a compute-hours model for the current inputs first.", parent=self.root)
             return
-        try:
-            prompt = copilot_prompt(redacted_result(self.result))
-            self.root.clipboard_clear()
-            self.root.clipboard_append(prompt)
-        except (ValueError, tk.TclError) as exc:
-            logging.error("Copilot prompt copy failed", extra={"error_type": type(exc).__name__})
-            messagebox.showerror(APP_TITLE, "Unable to copy the model prompt. Retry or use the JSON export.", parent=self.root)
+        if self.copilot_busy:
             return
-        messagebox.showinfo(
-            "Copilot prompt copied",
-            "Paste into your approved Copilot service for an explanation. Nothing was sent automatically. "
-            "The clipboard contains your financial assumptions and estimates; review them before sharing.",
-            parent=self.root,
+        self.copilot_generation += 1
+        generation = self.copilot_generation
+        snapshot = redacted_result(self.result)
+        model = self.values["aiModel"].get().strip()
+        self.copilot_busy = True
+        self.copilot_button.configure(state="disabled")
+        self.result["copilotAnalysis"] = {"status": "pending", "source": AI_SOURCE, "model": model}
+        self.report = build_report(self.result)
+        self.dashboard.show(self.report)
+        self.set_copilot_output(
+            "Asking local Ollama for your break-even analysis and explanation. "
+            "Loading the model may take a moment; calculated reference figures are available in the other tabs."
         )
+        self.tabs.select(self.copilot_tab)
+
+        def worker() -> None:
+            try:
+                analysis = explain_model(snapshot, model=model)
+            except (CopilotError, ValueError) as exc:
+                self.copilot_events.put((generation, None, clean_text(str(exc))))
+            except Exception as exc:
+                logging.error("AI desktop operation failed", extra={"error_type": type(exc).__name__})
+                self.copilot_events.put((generation, None, "Unexpected AI failure. No AI explanation is available. Retry Ask AI."))
+            else:
+                self.copilot_events.put((generation, redacted_result(analysis), None))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def export_report(self, kind: str) -> None:
         if self.report is None or self.result is None or self.busy:
