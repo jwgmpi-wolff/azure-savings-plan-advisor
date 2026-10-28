@@ -61,6 +61,10 @@ Downloads hosted in this private repository require signing in to GitHub with re
 | v0.7.0 | Windows installer | [AzureSavingsPlanAdvisor-0.7.0-Setup-x64.exe](https://github.com/jerrywolff_microsoft/azure-savings-plan-advisor/releases/download/v0.7.0/AzureSavingsPlanAdvisor-0.7.0-Setup-x64.exe) |
 | v0.6.0 | Windows installer | [AzureSavingsPlanAdvisor-0.6.0-Setup-x64.exe](https://github.com/jerrywolff_microsoft/azure-savings-plan-advisor/releases/download/v0.6.0/AzureSavingsPlanAdvisor-0.6.0-Setup-x64.exe) |
 | v0.5.0 | Windows installer | [AzureSavingsPlanAdvisor-0.5.0-Setup-x64.exe](https://github.com/jerrywolff_microsoft/azure-savings-plan-advisor/releases/download/v0.5.0/AzureSavingsPlanAdvisor-0.5.0-Setup-x64.exe) |
+| v0.4.1 | Windows installer | [AzureSavingsPlanAdvisor-0.4.1-Setup-x64.exe](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/download/v0.4.1/AzureSavingsPlanAdvisor-0.4.1-Setup-x64.exe) |
+| v0.4.0 | Windows installer | [AzureSavingsPlanAdvisor-0.4.0-Setup-x64.exe](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/download/v0.4.0/AzureSavingsPlanAdvisor-0.4.0-Setup-x64.exe) |
+| v0.3.0 | Windows installer | [AzureSavingsPlanAdvisor-0.3.0-Setup-x64.exe](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/download/v0.3.0/AzureSavingsPlanAdvisor-0.3.0-Setup-x64.exe) |
+| v0.2.0 | Windows installer | [AzureSavingsPlanAdvisor-0.2.0-Setup-x64.exe](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases/download/v0.2.0/AzureSavingsPlanAdvisor-0.2.0-Setup-x64.exe) |
 
 ### Repository-hosted packages: all available versions
 
@@ -70,14 +74,19 @@ Downloads hosted in this private repository require signing in to GitHub with re
 | repository | Windows installer | [downloads/windows/AzureSavingsPlanAdvisor-0.7.0-Setup-x64.exe](https://github.com/jerrywolff_microsoft/azure-savings-plan-advisor/raw/refs/heads/main/downloads/windows/AzureSavingsPlanAdvisor-0.7.0-Setup-x64.exe) |
 | repository | Windows installer | [downloads/windows/AzureSavingsPlanAdvisor-0.7.1-Setup-x64.exe](https://github.com/jerrywolff_microsoft/azure-savings-plan-advisor/raw/refs/heads/main/downloads/windows/AzureSavingsPlanAdvisor-0.7.1-Setup-x64.exe) |
 | repository | Windows installer | [downloads/windows/AzureSavingsPlanAdvisor-0.7.2-Setup-x64.exe](https://github.com/jerrywolff_microsoft/azure-savings-plan-advisor/raw/refs/heads/main/downloads/windows/AzureSavingsPlanAdvisor-0.7.2-Setup-x64.exe) |
+| historical personal revision | Windows installer | [downloads/windows/AzureSavingsPlanAdvisor-0.4.1-Setup-x64.exe](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/raw/8e3b2ecf1f2965dc429d6093311f1e2a4683df1e/downloads/windows/AzureSavingsPlanAdvisor-0.4.1-Setup-x64.exe) |
 
 Git LFS links download the package itself, not a pointer file. Executables without a setup wrapper may require accompanying project files.
 
 ### Setup scripts and source
 
 
-- [Download the complete source ZIP](https://github.com/jerrywolff_microsoft/azure-savings-plan-advisor/archive/refs/heads/main.zip). Extract the complete checkout before running setup scripts unless the project instructions explicitly support standalone installation.
-- [Browse all releases and their assets](https://github.com/jerrywolff_microsoft/azure-savings-plan-advisor/releases).
+- [Download the primary repository source ZIP](https://github.com/jerrywolff_microsoft/azure-savings-plan-advisor/archive/refs/heads/main.zip).
+- [Browse primary repository releases and assets](https://github.com/jerrywolff_microsoft/azure-savings-plan-advisor/releases).
+- [Download the personal mirror source ZIP](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/archive/refs/heads/main.zip).
+- [Browse personal mirror releases and assets](https://github.com/jwgmpi-wolff/azure-savings-plan-advisor/releases).
+
+Extract the complete checkout before running setup scripts unless the project instructions explicitly support standalone installation.
 
 Android may require approval to install apps from the download source. Follow the project-specific installation, signing, checksum, and prerequisite instructions elsewhere in this README.
 <!-- project-downloads:end -->
